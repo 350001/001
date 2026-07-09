@@ -75,7 +75,7 @@ jobs:
       - name: Package APT cache (only if cache miss)
         if: steps.cache-apt.outputs.cache-hit != 'true'
         run: |
-          sudo tar -cpf /tmp/apt-cache.tar -C /var/cache/apt archives
+          sudo tar -cpf /tmp/apt-cache.tar -C /var/cache/apt .
           sudo chown $USER:$USER /tmp/apt-cache.tar
 
       - name: Save APT cache (only if cache miss)
