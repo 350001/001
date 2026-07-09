@@ -10,6 +10,7 @@ concurrency:
 env:
   XRAY_VERSION: 26.3.27
   TEST_TIME: 300
+  WARP_CONFIG_VERSION: v1
 
 jobs:
   gateway:
@@ -18,14 +19,6 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Cache apt packages
-        uses: actions/cache@v6
-        with:
-          path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-packages-v1
-          restore-keys: |
-            apt-${{ runner.os }}-
 
       - name: Cache Xray
         uses: actions/cache@v6
@@ -36,9 +29,7 @@ jobs:
       - name: Get cloudflared version
         id: cloudflared-version
         run: |
-          VERSION=$(curl -fsSL \
-          https://api.github.com/repos/cloudflare/cloudflared/releases/latest \
-          | jq -r '.tag_name')
+          VERSION=$(curl -fsSL https://api.github.com/repos/cloudflare/cloudflared/releases/latest | jq -r '.tag_name') || VERSION="2026.7.0"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Cache cloudflared
@@ -47,43 +38,41 @@ jobs:
           path: ~/cloudflared
           key: cloudflared-${{ steps.cloudflared-version.outputs.version }}
 
+      - name: Cache WARP Config
+        uses: actions/cache@v6
+        with:
+          path: ~/warp-config
+          key: warp-${{ runner.os }}-${{ env.WARP_CONFIG_VERSION }}
+
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y \
-            curl \
-            wget \
-            unzip \
-            jq \
-            gnupg
+          sudo apt install -y curl wget unzip jq gnupg
 
       - name: Install WARP
         run: |
+          set -Eeuo pipefail
           curl -fsSL \
           https://pkg.cloudflareclient.com/pubkey.gpg \
           | sudo gpg --dearmor \
           -o /usr/share/keyrings/cloudflare-warp.gpg
           echo \
-          "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ noble main" \
+          "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
           | sudo tee \
           /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt update
           sudo apt install -y cloudflare-warp
 
-      - name: Restore WARP data
+      - name: Restore WARP
         run: |
-          echo "${{ vars.WARP_DATA }}" \
-          | base64 -d \
-          > /tmp/warp.tar.gz
-          tar tzf /tmp/warp.tar.gz >/dev/null
+          set -Eeuo pipefail
           sudo systemctl stop warp-svc || true
-          sudo rm -rf \
-          /var/lib/cloudflare-warp
-          sudo tar xzf \
-          /tmp/warp.tar.gz \
-          -C /var/lib
-          sudo chown -R root:root \
-          /var/lib/cloudflare-warp
+          if [ -d ~/warp-config ]
+          then
+            sudo rm -rf /var/lib/cloudflare-warp
+            sudo cp -a ~/warp-config /var/lib/cloudflare-warp
+            sudo chown -R root:root /var/lib/cloudflare-warp
+          fi
 
       - name: Start WARP proxy
         run: |
@@ -96,9 +85,39 @@ jobs:
             fi
             sleep 2
           done
+          if ! warp-cli --accept-tos registration show >/dev/null 2>&1
+          then
+            warp-cli --accept-tos registration new
+            rm -rf ~/warp-config
+            sudo cp -a /var/lib/cloudflare-warp ~/warp-config
+            sudo chown -R $USER:$USER ~/warp-config
+          fi
           warp-cli --accept-tos mode proxy
           warp-cli --accept-tos proxy port 40000
           warp-cli --accept-tos connect
+          for i in {1..10}; do
+            if curl -s --socks5 127.0.0.1:40000 https://cp.cloudflare.com -o /dev/null; then
+              break
+            fi
+            sleep 2
+            if [ $i -eq 10 ]; then
+              echo "WARP proxy not functional after 20s, resetting..."
+              warp-cli --accept-tos disconnect
+              warp-cli --accept-tos registration delete || true
+              warp-cli --accept-tos registration new
+              warp-cli --accept-tos mode proxy
+              warp-cli --accept-tos proxy port 40000
+              warp-cli --accept-tos connect
+              rm -rf ~/warp-config
+              sudo cp -a /var/lib/cloudflare-warp ~/warp-config
+              sudo chown -R $USER:$USER ~/warp-config
+              sleep 2
+              if ! curl -s --socks5 127.0.0.1:40000 https://cp.cloudflare.com -o /dev/null; then
+                echo "WARP proxy still not functional after reset. Exiting."
+                exit 1
+              fi
+            fi
+          done
 
       - name: Install Xray
         run: |
@@ -159,14 +178,6 @@ jobs:
           echo "================================"
           echo "Xray + WARP + Cloudflared Ready"
           echo "================================"
-          echo
-          echo "===== WARP STATUS ====="
-          warp-cli --accept-tos status || true
-          echo
-          echo "===== PROCESS ====="
-          ps aux \
-          | grep -E "xray|cloudflared|warp" \
-          | grep -v grep || true
           echo
           echo "===== LIVE LOG (${TEST_TIME}s) ====="
           timeout ${TEST_TIME}s bash -c '
