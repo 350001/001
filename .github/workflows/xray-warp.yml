@@ -44,46 +44,13 @@ jobs:
           path: ~/warp-config
           key: warp-config-${{ runner.os }}-${{ env.WARP_CONFIG_VERSION }}
 
-      - name: Install dependencies
-        id: deps
+      - name: Install WARP
         run: |
           set -Eeuo pipefail
-          sudo apt update
-          sudo apt install -y curl wget unzip jq gnupg
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt update
-          WARP_VERSION=$(apt-cache madison cloudflare-warp | head -1 | awk '{print $3}')
-          echo "warp_version=$WARP_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Restore APT cache
-        id: cache-apt
-        uses: actions/cache/restore@v6
-        with:
-          path: /tmp/apt-cache.tar
-          key: apt-${{ runner.os }}-${{ steps.deps.outputs.warp_version }}
-          restore-keys: |
-            apt-${{ runner.os }}
-
-      - name: Install WARP
-        run: |
-          if [ -f /tmp/apt-cache.tar ]; then
-            sudo tar -xpf /tmp/apt-cache.tar -C /var/cache/apt
-          fi
           sudo apt install -y cloudflare-warp
-
-      - name: Package APT cache (only if cache miss)
-        if: steps.cache-apt.outputs.cache-hit != 'true'
-        run: |
-          sudo tar -cpf /tmp/apt-cache.tar -C /var/cache/apt .
-          sudo chown $USER:$USER /tmp/apt-cache.tar
-
-      - name: Save APT cache (only if cache miss)
-        if: steps.cache-apt.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v6
-        with:
-          path: /tmp/apt-cache.tar
-          key: apt-${{ runner.os }}-${{ steps.deps.outputs.warp_version }}
 
       - name: Restore WARP
         run: |
