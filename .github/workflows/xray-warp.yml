@@ -54,7 +54,7 @@ jobs:
       - name: Cache APT packages (WARP & dependencies)
         uses: actions/cache@v6
         with:
-          path: ~/apt-cache
+          path: /tmp/apt-cache
           key: apt-${{ runner.os }}-${{ steps.deps.outputs.ubuntu_version }}-warp-${{ env.WARP_CONFIG_VERSION }}
           restore-keys: |
             apt-${{ runner.os }}-${{ steps.deps.outputs.ubuntu_version }}-warp-
@@ -62,11 +62,11 @@ jobs:
       - name: Install WARP
         run: |
           set -Eeuo pipefail
-          mkdir -p ~/apt-cache/partial
+          mkdir -p /tmp/apt-cache/partial
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt update
-          sudo apt install -y -o Dir::Cache::Archives=~/apt-cache cloudflare-warp
+          sudo apt install -y -o Dir::Cache::Archives=/tmp/apt-cache cloudflare-warp
 
       - name: Restore WARP
         run: |
