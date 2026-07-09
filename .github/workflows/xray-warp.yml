@@ -1,0 +1,170 @@
+name: Xray WARP Gateway Test
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: xray-warp-gateway
+  cancel-in-progress: true
+
+env:
+  XRAY_VERSION: 26.3.27
+  TEST_TIME: 300
+
+jobs:
+  gateway:
+    runs-on: ubuntu-24.04
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Cache apt packages
+        uses: actions/cache@v6
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-packages-v1
+          restore-keys: |
+            apt-${{ runner.os }}-
+
+      - name: Cache Xray
+        uses: actions/cache@v6
+        with:
+          path: ~/xray
+          key: xray-${{ env.XRAY_VERSION }}-${{ runner.arch }}
+
+      - name: Get cloudflared version
+        id: cloudflared-version
+        run: |
+          VERSION=$(curl -fsSL \
+          https://api.github.com/repos/cloudflare/cloudflared/releases/latest \
+          | jq -r '.tag_name')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cloudflared
+        uses: actions/cache@v6
+        with:
+          path: ~/cloudflared
+          key: cloudflared-${{ steps.cloudflared-version.outputs.version }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            curl \
+            wget \
+            unzip \
+            jq \
+            gnupg
+
+      - name: Install WARP
+        run: |
+          curl -fsSL \
+          https://pkg.cloudflareclient.com/pubkey.gpg \
+          | sudo gpg --dearmor \
+          -o /usr/share/keyrings/cloudflare-warp.gpg
+          echo \
+          "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ noble main" \
+          | sudo tee \
+          /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt update
+          sudo apt install -y cloudflare-warp
+
+      - name: Restore WARP data
+        run: |
+          echo "${{ vars.WARP_DATA }}" \
+          | base64 -d \
+          > /tmp/warp.tar.gz
+          tar tzf /tmp/warp.tar.gz >/dev/null
+          sudo systemctl stop warp-svc || true
+          sudo rm -rf \
+          /var/lib/cloudflare-warp
+          sudo tar xzf \
+          /tmp/warp.tar.gz \
+          -C /var/lib
+          sudo chown -R root:root \
+          /var/lib/cloudflare-warp
+
+      - name: Start WARP proxy
+        run: |
+          sudo systemctl restart warp-svc
+          warp-cli --accept-tos mode proxy
+          warp-cli --accept-tos proxy port 40000
+          warp-cli --accept-tos connect
+
+      - name: Install Xray
+        run: |
+          mkdir -p ~/xray
+          if [ ! -x ~/xray/xray ]
+          then
+            wget -q \
+            https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip \
+            -O /tmp/xray.zip
+            unzip -oq \
+            /tmp/xray.zip \
+            -d ~/xray
+            chmod +x ~/xray/xray
+          fi
+          ~/xray/xray version
+
+      - name: Generate Xray config
+        env:
+          XRAY_CONFIG: ${{ vars.XRAY_CONFIG }}
+        run: |
+          test -n "$XRAY_CONFIG"
+          printf '%s' \
+          "$XRAY_CONFIG" \
+          > ~/xray/config.json
+          jq . ~/xray/config.json
+
+      - name: Start Xray
+        run: |
+          nohup ~/xray/xray run \
+          -config ~/xray/config.json \
+          > ~/xray/xray.log 2>&1 &
+
+      - name: Install cloudflared
+        run: |
+          mkdir -p ~/cloudflared
+          if [ ! -x ~/cloudflared/cloudflared ]
+          then
+            wget -q \
+            https://github.com/cloudflare/cloudflared/releases/download/${{ steps.cloudflared-version.outputs.version }}/cloudflared-linux-amd64 \
+            -O ~/cloudflared/cloudflared
+            chmod +x ~/cloudflared/cloudflared
+          fi
+          ~/cloudflared/cloudflared --version
+
+      - name: Start Cloudflare Tunnel
+        env:
+          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+        run: |
+          test -n "$TUNNEL_TOKEN"
+          nohup ~/cloudflared/cloudflared tunnel run \
+          --token "$TUNNEL_TOKEN" \
+          > ~/cloudflared/cloudflared.log 2>&1 &
+
+      - name: Running
+        run: |
+          echo "================================"
+          echo "Xray + WARP + Cloudflared Ready"
+          echo "================================"
+          echo
+          echo "===== WARP STATUS ====="
+          warp-cli --accept-tos status || true
+          echo
+          echo "===== PROCESS ====="
+          ps aux \
+          | grep -E "xray|cloudflared|warp" \
+          | grep -v grep || true
+          echo
+          echo "===== XRAY LOG ====="
+          cat ~/xray/xray.log || true
+          echo
+          echo "===== CLOUDFLARED LOG ====="
+          cat ~/cloudflared/cloudflared.log || true
+          echo
+          echo "Running ${TEST_TIME}s test..."
+          sleep ${TEST_TIME}
+          echo
+          echo "Finished."
