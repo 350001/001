@@ -1,4 +1,4 @@
-name: Xray + WARP + Cloudflared
+name: Xray WARP Cloudflared
 
 on:
   workflow_dispatch:
@@ -8,46 +8,43 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v5
 
-      # =========================
-      # Cache apt packages
-      # =========================
-      - name: Cache apt packages
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-warp-v1
-          restore-keys: |
-            apt-${{ runner.os }}-
+      - name: Checkout
+        uses: actions/checkout@v6
+
 
       # =========================
       # Cache Xray
       # =========================
       - name: Cache Xray
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/xray
           key: xray-v26.3.27-linux-amd64
 
-      # =========================
-      # Get latest Cloudflared version
-      # =========================
-      - name: Get latest Cloudflared version
-        id: cloudflared-version
-        run: |
-          VERSION=$(curl -fsSL https://api.github.com/repos/cloudflare/cloudflared/releases/latest | jq -r '.tag_name')
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Cloudflared Version: $VERSION"
 
       # =========================
-      # Cache Cloudflared
+      # Get latest cloudflared
       # =========================
-      - name: Cache Cloudflared
-        uses: actions/cache@v4
+      - name: Get cloudflared version
+        id: cloudflared-version
+        run: |
+          VERSION=$(curl -fsSL \
+            https://api.github.com/repos/cloudflare/cloudflared/releases/latest \
+            | jq -r '.tag_name')
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+
+      # =========================
+      # Cache cloudflared
+      # =========================
+      - name: Cache cloudflared
+        uses: actions/cache@v6
         with:
           path: ~/cloudflared
-          key: cloudflared-${{ runner.os }}-${{ runner.arch }}-${{ steps.cloudflared-version.outputs.version }}
+          key: cloudflared-${{ runner.os }}-${{ steps.cloudflared-version.outputs.version }}
+
 
       # =========================
       # Install WARP
@@ -61,18 +58,20 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ noble main" \
             | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
 
-          sudo apt-get update
+          sudo apt update
 
-          sudo apt-get install -y \
+          sudo apt install -y \
             cloudflare-warp \
             unzip
+
 
       # =========================
       # Restore WARP
       # =========================
       - name: Restore WARP data
         run: |
-          echo "${{ secrets.WARP_DATA }}" | base64 -d > /tmp/warp.tar.gz
+          echo "${{ vars.WARP_DATA }}" \
+            | base64 -d > /tmp/warp.tar.gz
 
           sudo systemctl stop warp-svc || true
 
@@ -80,8 +79,11 @@ jobs:
 
           sudo tar xzf /tmp/warp.tar.gz -C /var/lib
 
+          sudo chown -R root:root /var/lib/cloudflare-warp
+
+
       # =========================
-      # Start WARP
+      # Start WARP SOCKS
       # =========================
       - name: Start WARP
         run: |
@@ -90,6 +92,7 @@ jobs:
           sleep 5
 
           warp-cli --accept-tos mode proxy
+
           warp-cli --accept-tos proxy port 40000
 
           warp-cli --accept-tos connect
@@ -97,14 +100,7 @@ jobs:
           sleep 10
 
           warp-cli --accept-tos status
-          warp-cli --accept-tos registration show
 
-      # =========================
-      # Verify SOCKS5
-      # =========================
-      - name: Check SOCKS5
-        run: |
-          ss -lntp | grep 40000
 
       # =========================
       # Test WARP
@@ -114,38 +110,74 @@ jobs:
           curl --socks5-hostname 127.0.0.1:40000 \
             https://www.cloudflare.com/cdn-cgi/trace
 
+
       # =========================
-      # Download Xray v26.3.27
+      # Download Xray
       # =========================
       - name: Download Xray
         run: |
-          if [ ! -x "$HOME/xray/xray" ]; then
-            mkdir -p "$HOME/xray"
+          mkdir -p ~/xray
+
+          if [ ! -x ~/xray/xray ]; then
 
             wget -q \
-              https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip \
-              -O /tmp/xray.zip
+            https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-64.zip \
+            -O /tmp/xray.zip
 
-            unzip -oq /tmp/xray.zip -d "$HOME/xray"
+            unzip -oq /tmp/xray.zip \
+              -d ~/xray
 
-            chmod +x "$HOME/xray/xray"
+            chmod +x ~/xray/xray
+
           fi
 
-          "$HOME/xray/xray" version
+          ~/xray/xray version
+
 
       # =========================
-      # Download Cloudflared
+      # Generate Xray config
       # =========================
-      - name: Download Cloudflared
+      - name: Generate Xray config
+        env:
+          XRAY_CONFIG: ${{ vars.XRAY_CONFIG }}
         run: |
-          mkdir -p "$HOME/cloudflared"
+          mkdir -p ~/xray
 
-          if [ ! -x "$HOME/cloudflared/cloudflared" ]; then
+          printf '%s' "$XRAY_CONFIG" \
+            > ~/xray/config.json
+
+          jq . ~/xray/config.json
+
+
+      # =========================
+      # Start Xray
+      # =========================
+      - name: Start Xray
+        run: |
+          nohup ~/xray/xray run \
+            -config ~/xray/config.json \
+            > ~/xray/xray.log 2>&1 &
+
+          sleep 5
+
+          cat ~/xray/xray.log
+
+
+      # =========================
+      # Download cloudflared
+      # =========================
+      - name: Download cloudflared
+        run: |
+          mkdir -p ~/cloudflared
+
+          if [ ! -x ~/cloudflared/cloudflared ]; then
+
             wget -q \
-              "https://github.com/cloudflare/cloudflared/releases/download/${{ steps.cloudflared-version.outputs.version }}/cloudflared-linux-amd64" \
-              -O "$HOME/cloudflared/cloudflared"
+            https://github.com/cloudflare/cloudflared/releases/download/${{ steps.cloudflared-version.outputs.version }}/cloudflared-linux-amd64 \
+            -O ~/cloudflared/cloudflared
 
-            chmod +x "$HOME/cloudflared/cloudflared"
+            chmod +x ~/cloudflared/cloudflared
+
           fi
 
-          "$HOME/cloudflared/cloudflared" --version
+          ~/cloudflared/cloudflared --version
