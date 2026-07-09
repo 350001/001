@@ -90,7 +90,7 @@ jobs:
           sudo systemctl restart warp-svc
           for i in {1..30}
           do
-            if systemctl is-active --quiet warp-svc
+            if warp-cli --accept-tos status >/dev/null 2>&1
             then
               break
             fi
