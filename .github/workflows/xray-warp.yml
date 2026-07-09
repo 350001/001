@@ -45,30 +45,34 @@ jobs:
           key: warp-config-${{ runner.os }}-${{ env.WARP_CONFIG_VERSION }}
 
       - name: Install dependencies
+        id: deps
         run: |
           sudo apt update
           sudo apt install -y curl wget unzip jq gnupg
+          echo "ubuntu_version=$(lsb_release -rs)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache APT packages (WARP & dependencies)
+        uses: actions/cache@v6
+        with:
+          path: ~/apt-cache
+          key: apt-${{ runner.os }}-${{ steps.deps.outputs.ubuntu_version }}-warp-${{ env.WARP_CONFIG_VERSION }}
+          restore-keys: |
+            apt-${{ runner.os }}-${{ steps.deps.outputs.ubuntu_version }}-warp-
 
       - name: Install WARP
         run: |
           set -Eeuo pipefail
-          curl -fsSL \
-          https://pkg.cloudflareclient.com/pubkey.gpg \
-          | sudo gpg --dearmor \
-          -o /usr/share/keyrings/cloudflare-warp.gpg
-          echo \
-          "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
-          | sudo tee \
-          /etc/apt/sources.list.d/cloudflare-client.list
+          mkdir -p ~/apt-cache
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt update
-          sudo apt install -y cloudflare-warp
+          sudo apt install -y -o Dir::Cache::Archives=~/apt-cache cloudflare-warp
 
       - name: Restore WARP
         run: |
           set -Eeuo pipefail
           sudo systemctl stop warp-svc || true
-          if [ -d ~/warp-config ]
-          then
+          if [ -d ~/warp-config ]; then
             sudo rm -rf /var/lib/cloudflare-warp
             sudo cp -a ~/warp-config /var/lib/cloudflare-warp
             sudo chown -R root:root /var/lib/cloudflare-warp
@@ -77,16 +81,13 @@ jobs:
       - name: Start WARP proxy
         run: |
           sudo systemctl restart warp-svc
-          for i in {1..30}
-          do
-            if warp-cli --accept-tos status >/dev/null 2>&1
-            then
+          for i in {1..30}; do
+            if warp-cli --accept-tos status >/dev/null 2>&1; then
               break
             fi
             sleep 2
           done
-          if ! warp-cli --accept-tos registration show >/dev/null 2>&1
-          then
+          if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
             warp-cli --accept-tos registration new
             rm -rf ~/warp-config
             sudo cp -a /var/lib/cloudflare-warp ~/warp-config
@@ -97,6 +98,7 @@ jobs:
           warp-cli --accept-tos connect
           for i in {1..10}; do
             if curl -s --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace | grep -q '^warp=on$'; then
+              echo "WARP proxy is ready"
               break
             fi
             sleep 2
@@ -112,7 +114,7 @@ jobs:
               sudo cp -a /var/lib/cloudflare-warp ~/warp-config
               sudo chown -R $USER:$USER ~/warp-config
               sleep 2
-              if ! curl -s --socks5 127.0.0.1:40000 https://cp.cloudflare.com -o /dev/null; then
+              if ! curl -s --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace | grep -q '^warp=on$'; then
                 echo "WARP proxy still not functional after reset. Exiting."
                 exit 1
               fi
@@ -122,14 +124,9 @@ jobs:
       - name: Install Xray
         run: |
           mkdir -p ~/xray
-          if [ ! -x ~/xray/xray ]
-          then
-            wget -q \
-            https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip \
-            -O /tmp/xray.zip
-            unzip -oq \
-            /tmp/xray.zip \
-            -d ~/xray
+          if [ ! -x ~/xray/xray ]; then
+            wget -q https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip -O /tmp/xray.zip
+            unzip -oq /tmp/xray.zip -d ~/xray
             chmod +x ~/xray/xray
           fi
           ~/xray/xray version
@@ -139,25 +136,18 @@ jobs:
           XRAY_CONFIG: ${{ vars.XRAY_CONFIG }}
         run: |
           test -n "$XRAY_CONFIG"
-          printf '%s' \
-          "$XRAY_CONFIG" \
-          > ~/xray/config.json
+          printf '%s' "$XRAY_CONFIG" > ~/xray/config.json
           jq . ~/xray/config.json
 
       - name: Start Xray
         run: |
-          nohup ~/xray/xray run \
-          -config ~/xray/config.json \
-          > ~/xray/xray.log 2>&1 &
+          nohup ~/xray/xray run -config ~/xray/config.json > ~/xray/xray.log 2>&1 &
 
       - name: Install cloudflared
         run: |
           mkdir -p ~/cloudflared
-          if [ ! -x ~/cloudflared/cloudflared ]
-          then
-            wget -q \
-            https://github.com/cloudflare/cloudflared/releases/download/${{ steps.cloudflared-version.outputs.version }}/cloudflared-linux-amd64 \
-            -O ~/cloudflared/cloudflared
+          if [ ! -x ~/cloudflared/cloudflared ]; then
+            wget -q https://github.com/cloudflare/cloudflared/releases/download/${{ steps.cloudflared-version.outputs.version }}/cloudflared-linux-amd64 -O ~/cloudflared/cloudflared
             chmod +x ~/cloudflared/cloudflared
           fi
           ~/cloudflared/cloudflared --version
@@ -167,9 +157,7 @@ jobs:
           TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
           test -n "$TUNNEL_TOKEN"
-          nohup ~/cloudflared/cloudflared tunnel run \
-          --token "$TUNNEL_TOKEN" \
-          > ~/cloudflared/cloudflared.log 2>&1 &
+          nohup ~/cloudflared/cloudflared tunnel run > ~/cloudflared/cloudflared.log 2>&1 &
 
       - name: Running
         run: |
@@ -181,9 +169,7 @@ jobs:
           echo
           echo "===== LIVE LOG (${TEST_TIME}s) ====="
           timeout ${TEST_TIME}s bash -c '
-            tail -F \
-              ~/xray/xray.log \
-              ~/cloudflared/cloudflared.log
+            tail -F ~/xray/xray.log ~/cloudflared/cloudflared.log
           ' || { EXIT=$?; if [ $EXIT -ne 124 ]; then exit $EXIT; fi; }
           echo
           echo "================================"
