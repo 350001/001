@@ -184,7 +184,7 @@ jobs:
             tail -F \
               ~/xray/xray.log \
               ~/cloudflared/cloudflared.log
-          '
+          ' || { EXIT=$?; if [ $EXIT -ne 124 ]; then exit $EXIT; fi; }
           echo
           echo "================================"
           echo "Test finished."
