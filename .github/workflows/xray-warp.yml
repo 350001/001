@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/warp-config
-          key: warp-${{ runner.os }}-${{ env.WARP_CONFIG_VERSION }}
+          key: warp-config-${{ runner.os }}-${{ env.WARP_CONFIG_VERSION }}
 
       - name: Install dependencies
         run: |
