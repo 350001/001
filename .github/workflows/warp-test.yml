@@ -90,7 +90,7 @@ jobs:
       - name: Restore WARP data
         run: |
 
-          echo "${{ secrets.WARP_DATA }}" \
+          echo "${{ vars.WARP_DATA }}" \
             | base64 -d > /tmp/warp.tar.gz
 
 
