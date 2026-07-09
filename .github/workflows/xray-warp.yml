@@ -47,26 +47,43 @@ jobs:
       - name: Install dependencies
         id: deps
         run: |
+          set -Eeuo pipefail
           sudo apt update
           sudo apt install -y curl wget unzip jq gnupg
-          echo "ubuntu_version=$(lsb_release -rs)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache APT packages (WARP & dependencies)
-        uses: actions/cache@v6
-        with:
-          path: /tmp/apt-cache
-          key: apt-${{ runner.os }}-${{ steps.deps.outputs.ubuntu_version }}-warp-${{ env.WARP_CONFIG_VERSION }}
-          restore-keys: |
-            apt-${{ runner.os }}-${{ steps.deps.outputs.ubuntu_version }}-warp-
-
-      - name: Install WARP
-        run: |
-          set -Eeuo pipefail
-          mkdir -p /tmp/apt-cache/partial
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt update
-          sudo apt install -y -o Dir::Cache::Archives=/tmp/apt-cache cloudflare-warp
+          WARP_VERSION=$(apt-cache madison cloudflare-warp | head -1 | awk '{print $3}')
+          echo "warp_version=$WARP_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Restore APT cache
+        id: cache-apt
+        uses: actions/cache/restore@v6
+        with:
+          path: /tmp/apt-cache.tar
+          key: apt-${{ runner.os }}-${{ steps.deps.outputs.warp_version }}
+          restore-keys: |
+            apt-${{ runner.os }}
+
+      - name: Install WARP
+        run: |
+          if [ -f /tmp/apt-cache.tar ]; then
+            sudo tar -xpf /tmp/apt-cache.tar -C /var/cache/apt
+          fi
+          sudo apt install -y cloudflare-warp
+
+      - name: Package APT cache (only if cache miss)
+        if: steps.cache-apt.outputs.cache-hit != 'true'
+        run: |
+          sudo tar -cpf /tmp/apt-cache.tar -C /var/cache/apt archives
+          sudo chown $USER:$USER /tmp/apt-cache.tar
+
+      - name: Save APT cache (only if cache miss)
+        if: steps.cache-apt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: /tmp/apt-cache.tar
+          key: apt-${{ runner.os }}-${{ steps.deps.outputs.warp_version }}
 
       - name: Restore WARP
         run: |
