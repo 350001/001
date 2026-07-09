@@ -154,6 +154,8 @@ jobs:
 
       - name: Running
         run: |
+          touch ~/xray/xray.log
+          touch ~/cloudflared/cloudflared.log
           echo "================================"
           echo "Xray + WARP + Cloudflared Ready"
           echo "================================"
@@ -166,13 +168,13 @@ jobs:
           | grep -E "xray|cloudflared|warp" \
           | grep -v grep || true
           echo
-          echo "===== XRAY LOG ====="
-          cat ~/xray/xray.log || true
+          echo "===== LIVE LOG (${TEST_TIME}s) ====="
+          timeout ${TEST_TIME}s bash -c '
+            tail -F \
+              ~/xray/xray.log \
+              ~/cloudflared/cloudflared.log
+          '
           echo
-          echo "===== CLOUDFLARED LOG ====="
-          cat ~/cloudflared/cloudflared.log || true
-          echo
-          echo "Running ${TEST_TIME}s test..."
-          sleep ${TEST_TIME}
-          echo
-          echo "Finished."
+          echo "================================"
+          echo "Test finished."
+          echo "================================"
