@@ -120,22 +120,22 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p ~/xray
-          if [ -n "${WARP_ENDPOINT:-}" ]; then
-            WARP_ENDPOINT="$WARP_ENDPOINT"
-          else
-            WARP_ENDPOINT=$(jq -r '.endpoints[0].v4' ~/warp-config/conf.json)
-          fi
           WARP_PRIVATE_KEY=$(jq -r '.secret_key' ~/warp-config/reg.json)
           WARP_PUBLIC_KEY=$(jq -r '.public_key' ~/warp-config/conf.json)
           WARP_IPV4=$(jq -r '.interface.v4' ~/warp-config/conf.json)
           WARP_IPV6=$(jq -r '.interface.v6' ~/warp-config/conf.json)
           WARP_MTU=${WARP_MTU:-1280}
-          export WARP_ENDPOINT
+          if [ -n "${WARP_ENDPOINT:-}" ]; then
+            WARP_ENDPOINT="$WARP_ENDPOINT"
+          else
+            WARP_ENDPOINT=$(jq -r '.endpoints[0].v4' ~/warp-config/conf.json)
+          fi
           export WARP_PRIVATE_KEY
           export WARP_PUBLIC_KEY
           export WARP_IPV4
           export WARP_IPV6
           export WARP_MTU
+          export WARP_ENDPOINT
           envsubst \
             < xray/config.template.json \
             > ~/xray/config.json
@@ -187,4 +187,3 @@ jobs:
           echo "================================"
           echo "Test finished."
           echo "================================"
-
