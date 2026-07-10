@@ -70,7 +70,9 @@ jobs:
             echo "warp-svc not ready"
             exit 1
           fi
-          warp-cli --accept-tos registration new
+          if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
+            warp-cli --accept-tos registration new
+          fi
           warp-cli --accept-tos connect
           WARP_OK=false
           for i in {1..15}; do
