@@ -34,7 +34,7 @@
           "${WARP_IPV4}/32",
           "${WARP_IPV6}/128"
         ],
-        "workers": 2,
+        "workers": 4,
         "domainStrategy": "ForceIP",
         "peers": [
           {
@@ -47,7 +47,7 @@
             "keepAlive": 25
           }
         ],
-        "noKernelTun": false
+        "noKernelTun": true
       }
     },
     {

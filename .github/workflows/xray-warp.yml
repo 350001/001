@@ -57,33 +57,17 @@ jobs:
         if: steps.warp-cache.outputs.cache-hit != 'true'
         run: |
           set -xEeuo pipefail
-          sudo systemctl restart warp-svc
-          WARP_OK=false
-          for i in {1..30}; do
-            if warp-cli --accept-tos status >/dev/null 2>&1; then
-              WARP_OK=true
-              break
-            fi
-            sleep 2
-          done
-          if [ "$WARP_OK" != "true" ]; then
-            echo "warp-svc not ready"
-            exit 1
-          fi
           if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
             warp-cli --accept-tos registration new
           fi
           warp-cli --accept-tos tunnel protocol set WireGuard
-          warp-cli --accept-tos disconnect
           sleep 3
-          warp-cli --accept-tos connect
           mkdir -p ~/warp-config
           sudo cp /var/lib/cloudflare-warp/reg.json \
           ~/warp-config/
           sudo cp /var/lib/cloudflare-warp/conf.json \
           ~/warp-config/
           sudo chown -R $USER:$USER ~/warp-config
-          warp-cli --accept-tos disconnect
 
       - name: Generate Xray Config
         env:
