@@ -56,7 +56,7 @@ jobs:
       - name: Register WARP
         if: steps.warp-cache.outputs.cache-hit != 'true'
         run: |
-          set -Eeuo pipefail
+          set -xEeuo pipefail
           sudo systemctl restart warp-svc
           WARP_OK=false
           for i in {1..30}; do
