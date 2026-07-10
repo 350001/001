@@ -121,9 +121,9 @@ jobs:
           set -Eeuo pipefail
           mkdir -p ~/xray
           if [ -n "${WARP_ENDPOINT:-}" ]; then
-            ENDPOINT="$WARP_ENDPOINT"
+            WARP_ENDPOINT="$WARP_ENDPOINT"
           else
-            ENDPOINT=$(jq -r '.endpoints[0].v4' ~/warp-config/conf.json)
+            WARP_ENDPOINT=$(jq -r '.endpoints[0].v4' ~/warp-config/conf.json)
           fi
           WARP_PRIVATE_KEY=$(jq -r '.secret_key' ~/warp-config/reg.json)
           PUBLIC_KEY=$(jq -r '.public_key' ~/warp-config/conf.json)
