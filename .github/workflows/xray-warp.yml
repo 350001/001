@@ -125,15 +125,17 @@ jobs:
           else
             ENDPOINT=$(jq -r '.endpoints[0].v4' ~/warp-config/conf.json)
           fi
-          PRIVATE_KEY=$(jq -r '.secret_key' ~/warp-config/reg.json)
+          WARP_PRIVATE_KEY=$(jq -r '.secret_key' ~/warp-config/reg.json)
           PUBLIC_KEY=$(jq -r '.public_key' ~/warp-config/conf.json)
-          IPV4=$(jq -r '.interface.v4' ~/warp-config/conf.json)
-          MTU=${WARP_MTU:-1280}
-          export ENDPOINT
-          export PRIVATE_KEY
-          export PUBLIC_KEY
-          export IPV4
-          export MTU
+          WARP_IPV4=$(jq -r '.interface.v4' ~/warp-config/conf.json)
+          WARP_IPV6=$(jq -r '.interface.v6' ~/warp-config/conf.json)
+          WARP_MTU=${WARP_MTU:-1280}
+          export WARP_ENDPOINT
+          export WARP_PRIVATE_KEY
+          export WARP_PUBLIC_KEY
+          export WARP_IPV4
+          export WARP_IPV6
+          export WARP_MTU
           envsubst \
             < xray/config.template.json \
             > ~/xray/config.json

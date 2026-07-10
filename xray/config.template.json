@@ -11,8 +11,7 @@
       "port": 25392,
       "protocol": "trojan",
       "settings": {
-        "clients": 
-          ${XRAY_CLIENTS}
+        "clients": ${XRAY_CLIENTS}
       },
       "streamSettings": {
         "network": "ws",
@@ -30,12 +29,30 @@
       "protocol": "wireguard",
       "settings": {
         "mtu": ${WARP_MTU},
-        "endpoint": "${WARP_ENDPOINT}",
         "secretKey": "${WARP_PRIVATE_KEY}",
         "address": [
-          "${WARP_IPV4}/32"
+          "${WARP_IPV4}/32",
+          "${WARP_IPV6}/128"
         ],
-        "publicKey": "${WARP_PUBLIC_KEY}"
+        "workers": 2,
+        "domainStrategy": "ForceIP",
+        "reserved": [
+          133,
+          6,
+          215
+        ],
+        "peers": [
+          {
+            "publicKey": "${WARP_PUBLIC_KEY}",
+            "allowedIPs": [
+              "0.0.0.0/0",
+              "::/0"
+            ],
+            "endpoint": "${WARP_ENDPOINT}",
+            "keepAlive": 0
+          }
+        ],
+        "noKernelTun": false
       }
     },
     {
