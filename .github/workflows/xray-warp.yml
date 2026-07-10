@@ -73,6 +73,7 @@ jobs:
           if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
             warp-cli --accept-tos registration new
           fi
+          warp-cli --accept-tos tunnel protocol set WireGuard
           warp-cli --accept-tos connect
           WARP_OK=false
           for i in {1..15}; do
@@ -88,11 +89,6 @@ jobs:
             echo "Initial WARP connection failed"
             exit 1
           fi
-          warp-cli --accept-tos tunnel protocol set WireGuard
-          warp-cli --accept-tos disconnect
-          sleep 2
-          warp-cli --accept-tos connect
-          sleep 5
           warp-cli --accept-tos disconnect
           mkdir -p ~/warp-config
           sudo cp /var/lib/cloudflare-warp/reg.json \
