@@ -111,7 +111,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p ~/xray
-          WARP_PRIVATE_KEY=$(jq -r '.secret_key' ~/warp-config/conf.json)
+          WARP_PRIVATE_KEY=$(jq -r '.secret_key' ~/warp-config/reg.json)
           WARP_PUBLIC_KEY=$(jq -r '.public_key' ~/warp-config/conf.json)
           WARP_IPV4=$(jq -r '.interface.v4' ~/warp-config/conf.json)
           WARP_IPV6=$(jq -r '.interface.v6' ~/warp-config/conf.json)
