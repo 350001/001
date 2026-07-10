@@ -31,8 +31,7 @@
         "mtu": ${WARP_MTU},
         "secretKey": "${WARP_PRIVATE_KEY}",
         "address": [
-          "${WARP_IPV4}/32",
-          "${WARP_IPV6}/128"
+          "${WARP_IPV4}/32"
         ],
         "workers": 4,
         "domainStrategy": "ForceIP",
