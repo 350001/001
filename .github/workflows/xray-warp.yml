@@ -83,12 +83,6 @@ jobs:
           sudo cp /var/lib/cloudflare-warp/conf.json \
           ~/warp-config/
           sudo chown -R $USER:$USER ~/warp-config
-          test -f ~/warp-config/reg.json
-          test -f ~/warp-config/conf.json
-          echo "===== reg ====="
-          cat ~/warp-config/reg.json || true
-          echo "===== conf ====="
-          cat ~/warp-config/conf.json || true
           warp-cli --accept-tos disconnect
 
       - name: Generate Xray Config
