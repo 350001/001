@@ -63,11 +63,8 @@ jobs:
           warp-cli --accept-tos tunnel protocol set WireGuard
           sleep 3
           mkdir -p ~/warp-config
-          sudo cp /var/lib/cloudflare-warp/reg.json \
-          ~/warp-config/
-          sudo cp /var/lib/cloudflare-warp/conf.json \
-          ~/warp-config/
-          sudo chown -R $USER:$USER ~/warp-config
+          sudo cp /var/lib/cloudflare-warp/{reg.json,conf.json} ~/warp-config/
+          sudo chown -R "$USER:$USER" ~/warp-config
 
       - name: Generate Xray Config
         env:
