@@ -1,0 +1,46 @@
+{
+  "log": {
+    "access": "none",
+    "dnsLog": false,
+    "error": "",
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 25392,
+      "protocol": "trojan",
+      "settings": {
+        "clients": 
+          ${XRAY_CLIENTS}
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "none",
+        "wsSettings": {
+          "path": "/helloworld"
+        }
+      },
+      "tag": "trojan-ws"
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "warp",
+      "protocol": "wireguard",
+      "settings": {
+        "mtu": ${WARP_MTU},
+        "endpoint": "${WARP_ENDPOINT}",
+        "secretKey": "${WARP_PRIVATE_KEY}",
+        "address": [
+          "${WARP_IPV4}/32"
+        ],
+        "publicKey": "${WARP_PUBLIC_KEY}"
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom"
+    }
+  ]
+}

@@ -9,7 +9,6 @@ concurrency:
 
 env:
   XRAY_VERSION: 26.3.27
-  TEST_TIME: 300
   WARP_CONFIG_VERSION: v1
 
 jobs:
@@ -39,12 +38,14 @@ jobs:
           key: cloudflared-${{ steps.cloudflared-version.outputs.version }}
 
       - name: Cache WARP Config
+        id: warp-cache
         uses: actions/cache@v6
         with:
           path: ~/warp-config
           key: warp-config-${{ runner.os }}-${{ env.WARP_CONFIG_VERSION }}
 
       - name: Install WARP
+        if: steps.warp-cache.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
@@ -52,61 +53,57 @@ jobs:
           sudo apt update
           sudo apt install -y cloudflare-warp
 
-      - name: Restore WARP
+      - name: Register WARP
+        if: steps.warp-cache.outputs.cache-hit != 'true'
         run: |
           set -Eeuo pipefail
-          sudo systemctl stop warp-svc || true
-          if [ -d ~/warp-config ]; then
-            sudo rm -rf /var/lib/cloudflare-warp
-            sudo cp -a ~/warp-config /var/lib/cloudflare-warp
-            sudo chown -R root:root /var/lib/cloudflare-warp
-          fi
-
-      - name: Start WARP proxy
-        run: |
           sudo systemctl restart warp-svc
+          WARP_OK=false
           for i in {1..30}; do
             if warp-cli --accept-tos status >/dev/null 2>&1; then
+              WARP_OK=true
               break
             fi
             sleep 2
           done
-          if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
-            warp-cli --accept-tos registration new
-            rm -rf ~/warp-config
-            sudo cp -a /var/lib/cloudflare-warp ~/warp-config
-            sudo chown -R $USER:$USER ~/warp-config
+          if [ "$WARP_OK" != "true" ]; then
+            echo "warp-svc not ready"
+            exit 1
           fi
-          warp-cli --accept-tos mode proxy
-          warp-cli --accept-tos proxy port 40000
+          warp-cli --accept-tos registration new
           warp-cli --accept-tos connect
-          for i in {1..10}; do
-            if curl -s --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace | grep -q '^warp=on$'; then
-              echo "WARP proxy is ready"
+          WARP_OK=false
+          for i in {1..15}; do
+            if curl -fsS \
+            https://www.cloudflare.com/cdn-cgi/trace \
+            | grep -q '^warp=on$'; then
+              WARP_OK=true
               break
             fi
             sleep 2
-            if [ $i -eq 10 ]; then
-              echo "WARP proxy not functional after 20s, resetting..."
-              warp-cli --accept-tos disconnect
-              warp-cli --accept-tos registration delete || true
-              warp-cli --accept-tos registration new
-              warp-cli --accept-tos mode proxy
-              warp-cli --accept-tos proxy port 40000
-              warp-cli --accept-tos connect
-              rm -rf ~/warp-config
-              sudo cp -a /var/lib/cloudflare-warp ~/warp-config
-              sudo chown -R $USER:$USER ~/warp-config
-              sleep 2
-              if ! curl -s --socks5 127.0.0.1:40000 https://www.cloudflare.com/cdn-cgi/trace | grep -q '^warp=on$'; then
-                echo "WARP proxy still not functional after reset. Exiting."
-                exit 1
-              fi
-            fi
           done
+          if [ "$WARP_OK" != "true" ]; then
+            echo "Initial WARP connection failed"
+            exit 1
+          fi
+          warp-cli --accept-tos tunnel protocol set WireGuard
+          warp-cli --accept-tos disconnect
+          sleep 2
+          warp-cli --accept-tos connect
+          sleep 5
+          warp-cli --accept-tos disconnect
+          mkdir -p ~/warp-config
+          sudo cp /var/lib/cloudflare-warp/reg.json \
+          ~/warp-config/
+          sudo cp /var/lib/cloudflare-warp/conf.json \
+          ~/warp-config/
+          sudo chown -R $USER:$USER ~/warp-config
+          test -f ~/warp-config/reg.json
+          test -f ~/warp-config/conf.json
 
       - name: Install Xray
         run: |
+          set -Eeuo pipefail
           mkdir -p ~/xray
           if [ ! -x ~/xray/xray ]; then
             wget -q https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip -O /tmp/xray.zip
@@ -115,13 +112,39 @@ jobs:
           fi
           ~/xray/xray version
 
-      - name: Generate Xray config
+      - name: Generate Xray Config
         env:
-          XRAY_CONFIG: ${{ vars.XRAY_CONFIG }}
+          XRAY_CLIENTS: ${{ vars.XRAY_CLIENTS }}
+          WARP_ENDPOINT: ${{ vars.WARP_ENDPOINT }}
+          WARP_MTU: ${{ vars.WARP_MTU }}
         run: |
-          test -n "$XRAY_CONFIG"
-          printf '%s' "$XRAY_CONFIG" > ~/xray/config.json
+          set -Eeuo pipefail
+          mkdir -p ~/xray
+          if [ -n "${WARP_ENDPOINT:-}" ]; then
+            ENDPOINT="$WARP_ENDPOINT"
+          else
+            ENDPOINT=$(jq -r '.endpoints[0].v4' ~/warp-config/conf.json)
+          fi
+          PRIVATE_KEY=$(jq -r '.secret_key' ~/warp-config/reg.json)
+          PUBLIC_KEY=$(jq -r '.public_key' ~/warp-config/conf.json)
+          IPV4=$(jq -r '.interface.v4' ~/warp-config/conf.json)
+          MTU=${WARP_MTU:-1280}
+          export ENDPOINT
+          export PRIVATE_KEY
+          export PUBLIC_KEY
+          export IPV4
+          export MTU
+          envsubst \
+            < xray/config.template.json \
+            > ~/xray/config.json
           jq . ~/xray/config.json
+
+      - name: Test Xray Config
+        run: |
+          set -Eeuo pipefail
+          ~/xray/xray run \
+          -test \
+          -config ~/xray/config.json
 
       - name: Start Xray
         run: |
@@ -129,6 +152,7 @@ jobs:
 
       - name: Install cloudflared
         run: |
+          set -Eeuo pipefail
           mkdir -p ~/cloudflared
           if [ ! -x ~/cloudflared/cloudflared ]; then
             wget -q https://github.com/cloudflare/cloudflared/releases/download/${{ steps.cloudflared-version.outputs.version }}/cloudflared-linux-amd64 -O ~/cloudflared/cloudflared
@@ -144,6 +168,8 @@ jobs:
           nohup ~/cloudflared/cloudflared tunnel run > ~/cloudflared/cloudflared.log 2>&1 &
 
       - name: Running
+        env:
+          XRAY_RUNTIME: ${{ vars.XRAY_RUNTIME }}
         run: |
           touch ~/xray/xray.log
           touch ~/cloudflared/cloudflared.log
@@ -152,7 +178,7 @@ jobs:
           echo "================================"
           echo
           echo "===== LIVE LOG (${TEST_TIME}s) ====="
-          timeout ${TEST_TIME}s bash -c '
+          timeout ${XRAY_RUNTIME:-300}s bash -c '
             tail -F ~/xray/xray.log ~/cloudflared/cloudflared.log
           ' || { EXIT=$?; if [ $EXIT -ne 124 ]; then exit $EXIT; fi; }
           echo
