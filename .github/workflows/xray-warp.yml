@@ -100,9 +100,15 @@ jobs:
           sudo chown -R $USER:$USER ~/warp-config
           test -f ~/warp-config/reg.json
           test -f ~/warp-config/conf.json
-          cat ~/warp-config/reg.json
-          echo
-          cat ~/warp-config/conf.json
+          set -x
+          pwd
+          echo "$HOME"
+          ls -lah /var/lib/cloudflare-warp || true
+          ls -lah ~/warp-config || true
+          echo "===== reg ====="
+          cat ~/warp-config/reg.json || true
+          echo "===== conf ====="
+          cat ~/warp-config/conf.json || true
 
       - name: Install Xray
         run: |
