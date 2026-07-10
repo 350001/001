@@ -44,7 +44,7 @@
               "::/0"
             ],
             "endpoint": "${WARP_ENDPOINT}",
-            "keepAlive": 0
+            "keepAlive": 25
           }
         ],
         "noKernelTun": false
