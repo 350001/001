@@ -74,6 +74,9 @@ jobs:
             warp-cli --accept-tos registration new
           fi
           warp-cli --accept-tos tunnel protocol set WireGuard
+          warp-cli --accept-tos disconnect
+          sleep 3
+          warp-cli --accept-tos connect
           mkdir -p ~/warp-config
           sudo cp /var/lib/cloudflare-warp/reg.json \
           ~/warp-config/
