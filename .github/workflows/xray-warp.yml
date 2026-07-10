@@ -89,7 +89,6 @@ jobs:
             echo "Initial WARP connection failed"
             exit 1
           fi
-          warp-cli --accept-tos disconnect
           mkdir -p ~/warp-config
           sudo cp /var/lib/cloudflare-warp/reg.json \
           ~/warp-config/
@@ -102,6 +101,7 @@ jobs:
           cat ~/warp-config/reg.json || true
           echo "===== conf ====="
           cat ~/warp-config/conf.json || true
+          warp-cli --accept-tos disconnect
 
       - name: Generate Xray Config
         env:
