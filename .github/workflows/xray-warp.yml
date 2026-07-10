@@ -140,6 +140,7 @@ jobs:
           envsubst \
             < xray/config.template.json \
             > ~/xray/config.json
+          nl -ba ~/xray/config.json | sed -n '45,60p'
           jq . ~/xray/config.json
 
       - name: Test Xray Config
