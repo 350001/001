@@ -130,6 +130,7 @@ jobs:
           else
             WARP_ENDPOINT=$(jq -r '.endpoints[0].v4' ~/warp-config/conf.json)
           fi
+          export XRAY_CLIENTS
           export WARP_PRIVATE_KEY
           export WARP_PUBLIC_KEY
           export WARP_IPV4
