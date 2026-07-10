@@ -36,11 +36,6 @@
         ],
         "workers": 2,
         "domainStrategy": "ForceIP",
-        "reserved": [
-          133,
-          6,
-          215
-        ],
         "peers": [
           {
             "publicKey": "${WARP_PUBLIC_KEY}",
