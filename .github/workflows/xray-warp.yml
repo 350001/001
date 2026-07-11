@@ -9,7 +9,8 @@ concurrency:
 
 env:
   XRAY_VERSION: 26.3.27
-  WARP_CONFIG_VERSION: v1
+  WARP_REG_JSON: ${{ vars.WARP_REG_JSON }}
+  WARP_CONF_JSON: ${{ vars.WARP_CONF_JSON }}
 
 jobs:
   gateway:
@@ -37,63 +38,74 @@ jobs:
           path: ~/cloudflared
           key: cloudflared-${{ steps.cloudflared-version.outputs.version }}
 
-      - name: Cache WARP Config
-        id: warp-cache
-        uses: actions/cache@v6
-        with:
-          path: ~/warp-config
-          key: warp-config-${{ runner.os }}-${{ env.WARP_CONFIG_VERSION }}
-
-      - name: Install WARP
-        if: steps.warp-cache.outputs.cache-hit != 'true'
+      - name: Install & Register WARP
+        if: env.WARP_REG_JSON == '' || env.WARP_CONF_JSON == ''
         run: |
           set -Eeuo pipefail
           curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
           echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
           sudo apt update
           sudo apt install -y cloudflare-warp
-
-      - name: Register WARP
-        if: steps.warp-cache.outputs.cache-hit != 'true'
-        run: |
-          set -xEeuo pipefail
-          if ! warp-cli --accept-tos registration show >/dev/null 2>&1; then
-            warp-cli --accept-tos registration new
-          fi
+          warp-cli --accept-tos registration new
           warp-cli --accept-tos tunnel protocol set WireGuard
           sleep 3
           mkdir -p ~/warp-config
           sudo cp /var/lib/cloudflare-warp/{reg.json,conf.json} ~/warp-config/
           sudo chown -R "$USER:$USER" ~/warp-config
+          echo "✅ WARP registered and config files saved to ~/warp-config/"
 
       - name: Generate Xray Config
         env:
           XRAY_CLIENTS: ${{ vars.XRAY_CLIENTS || '[]' }}
           WARP_ENDPOINT: ${{ vars.WARP_ENDPOINT }}
           WARP_MTU: ${{ vars.WARP_MTU }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           set -Eeuo pipefail
           mkdir -p ~/xray
-          WARP_PRIVATE_KEY=$(jq -r '.secret_key' ~/warp-config/reg.json)
-          WARP_PUBLIC_KEY=$(jq -r '.public_key' ~/warp-config/conf.json)
-          WARP_IPV4=$(jq -r '.interface.v4' ~/warp-config/conf.json)
-          WARP_IPV6=$(jq -r '.interface.v6' ~/warp-config/conf.json)
-          WARP_MTU=${WARP_MTU:-1280}
-          if [ -n "${WARP_ENDPOINT:-}" ]; then
-            WARP_ENDPOINT="$WARP_ENDPOINT"
+          if [ -n "$WARP_REG_JSON" ] && [ -n "$WARP_CONF_JSON" ]; then
+            echo "✅ Using WARP config from Variables."
+            WARP_PRIVATE_KEY=$(printf '%s' "$WARP_REG_JSON" | jq -r '.secret_key')
+            WARP_PUBLIC_KEY=$(printf '%s' "$WARP_CONF_JSON" | jq -r '.public_key')
+            WARP_IPV4=$(printf '%s' "$WARP_CONF_JSON" | jq -r '.interface.v4')
+            WARP_IPV6=$(printf '%s' "$WARP_CONF_JSON" | jq -r '.interface.v6')
+            if [ -n "${WARP_ENDPOINT:-}" ]; then
+              WARP_ENDPOINT="$WARP_ENDPOINT"
+            else
+              WARP_ENDPOINT=$(printf '%s' "$WARP_CONF_JSON" | jq -r '.endpoints[0].v4')
+            fi
           else
-            WARP_ENDPOINT=$(jq -r '.endpoints[0].v4' ~/warp-config/conf.json)
+            echo "⚠️ Variables not set, trying local config."
+            REG_COMPACT=$(jq -c . ~/warp-config/reg.json) || {
+              echo "❌ reg.json not found or invalid"
+              exit 1
+            }
+            CONF_COMPACT=$(jq -c . ~/warp-config/conf.json) || {
+              echo "❌ conf.json not found or invalid"
+              exit 1
+            }
+            WARP_PRIVATE_KEY=$(printf '%s' "$REG_COMPACT" | jq -r '.secret_key')
+            WARP_PUBLIC_KEY=$(printf '%s' "$CONF_COMPACT" | jq -r '.public_key')
+            WARP_IPV4=$(printf '%s' "$CONF_COMPACT" | jq -r '.interface.v4')
+            WARP_IPV6=$(printf '%s' "$CONF_COMPACT" | jq -r '.interface.v6')
+            if [ -n "${WARP_ENDPOINT:-}" ]; then
+              WARP_ENDPOINT="$WARP_ENDPOINT"
+            else
+              WARP_ENDPOINT=$(printf '%s' "$CONF_COMPACT" | jq -r '.endpoints[0].v4')
+            fi
+            if [ -n "$GH_TOKEN" ]; then
+              REPO="${{ github.repository }}"
+              echo "Setting Variables WARP_REG_JSON and WARP_CONF_JSON for future runs..."
+              gh variable set WARP_REG_JSON --body "$REG_COMPACT" -R "$REPO" || echo "⚠️ Failed to set WARP_REG_JSON"
+              gh variable set WARP_CONF_JSON --body "$CONF_COMPACT" -R "$REPO" || echo "⚠️ Failed to set WARP_CONF_JSON"
+              echo "✅ Variables updated (created if not existed)."
+            else
+              echo "⚠️ GH_TOKEN not set, variables not updated. Please manually set WARP_REG_JSON and WARP_CONF_JSON."
+            fi
           fi
-          export XRAY_CLIENTS
-          export WARP_PRIVATE_KEY
-          export WARP_PUBLIC_KEY
-          export WARP_IPV4
-          export WARP_IPV6
-          export WARP_MTU
-          export WARP_ENDPOINT
-          envsubst \
-            < xray/config.template.json \
-            > ~/xray/config.json
+          WARP_MTU=${WARP_MTU:-1280}
+          export XRAY_CLIENTS WARP_PRIVATE_KEY WARP_PUBLIC_KEY WARP_IPV4 WARP_IPV6 WARP_MTU WARP_ENDPOINT
+          envsubst < xray/config.template.json > ~/xray/config.json
           jq . ~/xray/config.json
 
       - name: Install Xray
@@ -110,9 +122,7 @@ jobs:
       - name: Test Xray Config
         run: |
           set -Eeuo pipefail
-          ~/xray/xray run \
-          -test \
-          -config ~/xray/config.json
+          ~/xray/xray run -test -config ~/xray/config.json
 
       - name: Start Xray
         run: |
@@ -137,7 +147,7 @@ jobs:
 
       - name: Running
         env:
-          XRAY_RUNTIME: ${{ vars.XRAY_RUNTIME }}
+          XRAY_RUNTIME: ${{ vars.XRAY_RUNTIME || '300' }}
         run: |
           touch ~/xray/xray.log
           touch ~/cloudflared/cloudflared.log
@@ -145,8 +155,8 @@ jobs:
           echo "Xray + WARP + Cloudflared Ready"
           echo "================================"
           echo
-          echo "===== LIVE LOG (${TEST_TIME}s) ====="
-          timeout ${XRAY_RUNTIME:-300}s bash -c '
+          echo "===== LIVE LOG (${XRAY_RUNTIME}s) ====="
+          timeout ${XRAY_RUNTIME}s bash -c '
             tail -F ~/xray/xray.log ~/cloudflared/cloudflared.log
           ' || { EXIT=$?; if [ $EXIT -ne 124 ]; then exit $EXIT; fi; }
           echo
