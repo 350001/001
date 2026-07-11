@@ -2,8 +2,9 @@
   "log": {
     "access": "none",
     "dnsLog": false,
-    "error": "",
-    "loglevel": "warning"
+		"maskAddress": "half",
+    "error": "none",
+    "loglevel": "debug"
   },
   "inbounds": [
     {
@@ -19,8 +20,7 @@
         "wsSettings": {
           "path": "/helloworld"
         }
-      },
-      "tag": "trojan-ws"
+      }
     }
   ],
   "outbounds": [

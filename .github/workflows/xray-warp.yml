@@ -68,7 +68,7 @@ jobs:
 
       - name: Generate Xray Config
         env:
-          XRAY_CLIENTS: ${{ vars.XRAY_CLIENTS }}
+          XRAY_CLIENTS: ${{ vars.XRAY_CLIENTS || '[]' }}
           WARP_ENDPOINT: ${{ vars.WARP_ENDPOINT }}
           WARP_MTU: ${{ vars.WARP_MTU }}
         run: |
