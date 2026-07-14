@@ -1,0 +1,309 @@
+name: Xray WARP Gateway
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: xray-warp-gateway
+  cancel-in-progress: true
+
+env:
+  XRAY_VERSION: 26.3.27
+  WARP_REG_JSON: ${{ secrets.WARP_REG_JSON }}
+  WARP_CONF_JSON: ${{ secrets.WARP_CONF_JSON }}
+
+jobs:
+  gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cache Xray
+        uses: actions/cache@v6
+        with:
+          path: ~/xray
+          key: xray-${{ env.XRAY_VERSION }}-${{ runner.arch }}
+
+      - name: Get cloudflared version
+        id: cloudflared-version
+        run: |
+          VERSION=$(curl -fsSL https://api.github.com/repos/cloudflare/cloudflared/releases/latest | jq -r '.tag_name') || VERSION="2026.7.0"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Get Caddy version
+        id: caddy-version
+        run: |
+          VERSION=$(curl -fsSL https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r '.tag_name') || VERSION="v2.11.4"
+          VERSION=${VERSION#v}
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cloudflared
+        uses: actions/cache@v6
+        with:
+          path: ~/cloudflared
+          key: cloudflared-${{ steps.cloudflared-version.outputs.version }}
+
+      - name: Cache Caddy
+        uses: actions/cache@v6
+        with:
+          path: ~/caddy
+          key: caddy-${{ steps.caddy-version.outputs.version }}-${{ runner.arch }}
+
+      - name: Install & Register WARP
+        if: env.WARP_REG_JSON == '' || env.WARP_CONF_JSON == ''
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-warp.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+          sudo apt update
+          sudo apt install -y cloudflare-warp
+          warp-cli --accept-tos registration new
+          warp-cli --accept-tos tunnel protocol set WireGuard
+          sleep 3
+          mkdir -p ~/warp-config
+          sudo cp /var/lib/cloudflare-warp/{reg.json,conf.json} ~/warp-config/
+          sudo chown -R "$USER:$USER" ~/warp-config
+          echo "✅ WARP registered and config files saved to ~/warp-config/"
+
+      - name: Generate Guest Account
+        run: |
+          set -Eeuo pipefail
+          GUEST_EMAIL="guest-$(openssl rand -hex 2)"
+          GUEST_PASSWORD="$(openssl rand -hex 8)"
+          GUEST_PATH="/api/$(openssl rand -hex 4)"
+          echo "GUEST_EMAIL=$GUEST_EMAIL" >> $GITHUB_ENV
+          echo "GUEST_PASSWORD=$GUEST_PASSWORD" >> $GITHUB_ENV
+          echo "GUEST_PATH=$GUEST_PATH" >> $GITHUB_ENV
+
+      - name: Generate Xray Config
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/xray
+          XRAY_CLIENTS='${{ vars.XRAY_CLIENTS || '[]' }}'
+          XRAY_CLIENTS_MERGED=$(
+            jq \
+            --arg password "$GUEST_PASSWORD" \
+            --arg email "$GUEST_EMAIL" \
+            '. + [{
+              password:$password,
+              email:$email
+            }]' \
+            <<< "$XRAY_CLIENTS"
+          )
+          WARP_ENDPOINT='${{ vars.WARP_ENDPOINT }}'
+          WARP_MTU='${{ vars.WARP_MTU }}'
+          GH_TOKEN='${{ secrets.GH_TOKEN }}'
+          echo "${XRAY_CLIENTS_MERGED}" | jq empty >/dev/null 2>&1 || { echo "❌ XRAY_CLIENTS is not valid JSON"; exit 1; }
+          if [ -n "$WARP_REG_JSON" ] && [ -n "$WARP_CONF_JSON" ]; then
+            echo "✅ Using WARP config from Secrets."
+            WARP_PRIVATE_KEY=$(jq -r '.secret_key' <<< "$WARP_REG_JSON")
+            WARP_PUBLIC_KEY=$(jq -r '.public_key' <<< "$WARP_CONF_JSON")
+            WARP_IPV4=$(jq -r '.interface.v4' <<< "$WARP_CONF_JSON")
+            WARP_IPV6=$(jq -r '.interface.v6 // empty' <<< "$WARP_CONF_JSON")
+            WARP_ENDPOINT="${WARP_ENDPOINT:-$(jq -r '.endpoints[0].v4' <<< "$WARP_CONF_JSON")}"
+          else
+            echo "⚠️ Secrets not set, trying local config."
+            REG_COMPACT=$(jq -c . ~/warp-config/reg.json) || {
+              echo "❌ reg.json not found or invalid"
+              exit 1
+            }
+            CONF_COMPACT=$(jq -c . ~/warp-config/conf.json) || {
+              echo "❌ conf.json not found or invalid"
+              exit 1
+            }
+            WARP_PRIVATE_KEY=$(jq -r '.secret_key' <<< "$REG_COMPACT")
+            WARP_PUBLIC_KEY=$(jq -r '.public_key' <<< "$CONF_COMPACT")
+            WARP_IPV4=$(jq -r '.interface.v4' <<< "$CONF_COMPACT")
+            WARP_IPV6=$(jq -r '.interface.v6 // empty' <<< "$CONF_COMPACT")
+            WARP_ENDPOINT="${WARP_ENDPOINT:-$(jq -r '.endpoints[0].v4' <<< "$CONF_COMPACT")}"
+            if [ -n "$GH_TOKEN" ]; then
+              REPO="${{ github.repository }}"
+              echo "Setting Secrets WARP_REG_JSON and WARP_CONF_JSON for future runs..."
+              gh secret set WARP_REG_JSON \
+                --body "$REG_COMPACT" \
+                -R "$REPO" || echo "⚠️ Failed to set WARP_REG_JSON"
+              gh secret set WARP_CONF_JSON \
+                --body "$CONF_COMPACT" \
+                -R "$REPO" || echo "⚠️ Failed to set WARP_CONF_JSON"
+              echo "✅ Secrets updated."
+            else
+              echo "⚠️ GH_TOKEN not set, secrets not updated."
+            fi
+          fi
+          WARP_MTU=${WARP_MTU:-1280}
+          jq -n \
+            --argjson clients "$XRAY_CLIENTS_MERGED" \
+            --arg wspath "$GUEST_PATH" \
+            --arg privateKey "$WARP_PRIVATE_KEY" \
+            --arg publicKey "$WARP_PUBLIC_KEY" \
+            --arg ipv4 "$WARP_IPV4" \
+            --arg ipv6 "$WARP_IPV6" \
+            --arg endpoint "$WARP_ENDPOINT" \
+            --argjson mtu "$WARP_MTU" \
+            '
+            {
+              "log": {
+                "access": "none",
+                "dnsLog": false,
+                "maskAddress": "half",
+                "error": "xray.log",
+                "loglevel": "warning"
+              },
+              "dns": {
+                "servers": [
+                  "1.1.1.1",
+                  "1.0.0.1"
+                ]
+              },
+              "inbounds": [
+                {
+                  "listen": "127.0.0.1",
+                  "port": 25392,
+                  "protocol": "trojan",
+                  "settings": {
+                    "clients": $clients
+                  },
+                  "streamSettings": {
+                    "network": "ws",
+                    "security": "none",
+                    "wsSettings": {
+                      "path": $wspath
+                    }
+                  }
+                }
+              ],
+              "outbounds": [
+                {
+                  "tag": "warp",
+                  "protocol": "wireguard",
+                  "settings": {
+                    "mtu": $mtu,
+                    "secretKey": $privateKey,
+                    "address":
+                      ([($ipv4 + "/32")] +
+                      (if $ipv6 != "" then [($ipv6 + "/128")] else [] end)),
+                    "workers": 4,
+                    "domainStrategy": "ForceIP",
+                    "peers": [
+                      {
+                        "publicKey": $publicKey,
+                        "allowedIPs": [
+                          "0.0.0.0/0",
+                          "::/0"
+                        ],
+                        "endpoint": $endpoint,
+                        "keepAlive": 25
+                      }
+                    ],
+                    "noKernelTun": true
+                  }
+                },
+                {
+                  "tag": "direct",
+                  "protocol": "freedom"
+                }
+              ]
+            }
+            ' > ~/config.json
+          echo "✅ Xray config generated at ~/config.json"
+
+      - name: Install Xray
+        run: |
+          set -Eeuo pipefail
+          if [ ! -x ~/xray/xray ]; then
+            wget -q https://github.com/XTLS/Xray-core/releases/download/v${XRAY_VERSION}/Xray-linux-64.zip -O /tmp/xray.zip || wget -q "https://github.com/350001/001/releases/download/bootstrap/Xray-linux-64.zip" -O /tmp/xray.zip
+            unzip -oq /tmp/xray.zip -d ~/xray
+            chmod +x ~/xray/xray
+          fi
+          ~/xray/xray version
+
+      - name: Test Xray Config
+        run: |
+          set -Eeuo pipefail
+          ~/xray/xray run -test -config ~/config.json
+
+      - name: Start Xray
+        run: |
+          nohup ~/xray/xray run -config ~/config.json > ~/xray.log 2>&1 &
+
+      - name: Install Caddy
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/caddy
+          if [ ! -x ~/caddy/caddy ]; then
+            VERSION="${{ steps.caddy-version.outputs.version }}"
+            wget -q "https://github.com/caddyserver/caddy/releases/download/v${VERSION}/caddy_${VERSION}_linux_amd64.tar.gz" -O /tmp/caddy.tar.gz || wget -q "https://github.com/350001/001/releases/download/bootstrap/caddy_2.11.4_linux_amd64.tar.gz" -O /tmp/caddy.tar.gz
+            tar -xzf /tmp/caddy.tar.gz \
+            -C ~/caddy caddy
+            chmod +x ~/caddy/caddy
+          fi
+          ~/caddy/caddy version
+
+      - name: Generate Website
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/www/assets
+          DOMAIN=${{ vars.DOMAIN || 'tunnel.nameserver.dpdns.org' }}
+          LINK="trojan://${GUEST_PASSWORD}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
+          LINK_JSON=$(printf '%s' "$LINK" | jq -Rs .)
+          EXPIRE_TIMESTAMP=$(( $(date +%s) + ${{ vars.XRAY_RUNTIME || '300' }} ))
+          cat > ~/www/index.html <<EOF
+          <!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport"content="width=device-width,initial-scale=1"><title>Xray Gateway</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at top,#2563eb55,transparent 40%),#020617;font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#e5e7eb}.card{width:min(92%,420px);padding:28px;border-radius:22px;background:#0f172acc;backdrop-filter:blur(15px);border:1px solid #ffffff15;box-shadow:0 20px 60px #0008}h1{text-align:center;margin:0;font-size:26px}.sub{text-align:center;color:#94a3b8;margin:10px 0 25px}.qr{text-align:center;display:flex;justify-content:center;align-items:center;min-height:240px}#qrcode{display:inline-block;background:white;padding:10px;border-radius:14px;line-height:0}#qrcode img,#qrcode canvas,#qrcode table{width:220px;height:220px}.info{margin-top:22px;background:#ffffff08;border-radius:14px;padding:15px}.row{display:flex;justify-content:space-between;padding:8px 0;font-size:14px;gap:15px}.key{color:#94a3b8}.val{text-align:right;word-break:normal;overflow-wrap:break-word}.timer{text-align:center;margin-top:15px;color:#60a5fa;font-size:16px;font-weight:600}.expired{color:#ef4444}button{margin-top:20px;width:100%;padding:12px;border:0;border-radius:12px;background:#2563eb;color:white;font-size:15px;cursor:pointer}button:hover{background:#1d4ed8}.footer{margin-top:20px;text-align:center;font-size:12px;color:#6473b8}.loading{color:#94a3b8;text-align:center;padding:20px}</style></head><body><div class="card"><h1>⚡Xray Gateway</h1><div class="sub">WebSocket Tunnel</div><div class="qr"><div id="qrcode"><div class="loading">Generating QR Code...</div></div></div><div class="info"><div class="row"><span class="key">User</span><span class="val">${GUEST_EMAIL}</span></div><div class="row"><span class="key">Password</span><span class="val">${GUEST_PASSWORD}</span></div><div class="row"><span class="key">Path</span><span class="val">${GUEST_PATH}</span></div></div><div class="timer"><span id="expireLabel">Expires in</span> <span id="countdown">--:--</span></div><button onclick="copyLink()">Copy Configuration</button><div class="footer">Xray · WARP · Cloudflare</div></div><script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script><script>const LINK=${LINK_JSON};const EXPIRE_TIMESTAMP=${EXPIRE_TIMESTAMP};const qrContainer=document.getElementById('qrcode');qrContainer.innerHTML='';try{new QRCode(qrContainer,{text:LINK,width:220,height:220,colorDark:'#000000',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M})}catch(e){qrContainer.innerHTML='<div style="color:#ef4444;">❌ QR generation failed</div>';console.error('QR Error:',e)}let expireTime=EXPIRE_TIMESTAMP*1000;function updateCountdown(){const label=document.getElementById('expireLabel'),el=document.getElementById('countdown'),remain=expireTime-Date.now();if(remain<=0){label.textContent='Status:';el.textContent='Expired';el.classList.add('expired');return}let seconds=Math.floor(remain/1000),days=Math.floor(seconds/86400),hours=Math.floor(seconds%86400/3600),minutes=Math.floor(seconds%3600/60),sec=seconds%60;if(days>0){el.textContent=days+'d '+String(hours).padStart(2,'0')+'h'}else if(hours>0){el.textContent=hours+'h '+String(minutes).padStart(2,'0')+'m'}else{el.textContent=String(minutes).padStart(2,'0')+':'+String(sec).padStart(2,'0')}setTimeout(updateCountdown,1000)}updateCountdown();function copyLink(){if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(LINK).then(()=>showToast('✅ Configuration copied')).catch(()=>fallbackCopy(LINK))}else{fallbackCopy(LINK)}}function fallbackCopy(text){const textarea=document.createElement('textarea');textarea.value=text;textarea.style.position='fixed';textarea.style.opacity='0';document.body.appendChild(textarea);textarea.select();try{document.execCommand('copy');showToast('✅ Configuration copied')}catch(e){showToast('❌ Copy failed, please copy manually')}document.body.removeChild(textarea)}function showToast(msg){const old=document.querySelector('.toast');if(old)old.remove();const toast=document.createElement('div');toast.className='toast';toast.textContent=msg;Object.assign(toast.style,{position:'fixed',bottom:'30px',left:'50%',transform:'translateX(-50%)',background:'#1e293b',color:'#e5e7eb',padding:'12px 24px',borderRadius:'12px',fontSize:'14px',zIndex:'9999',boxShadow:'0 10px 40px rgba(0,0,0,.5)',border:'1px solid #ffffff15',transition:'opacity .3s'});document.body.appendChild(toast);setTimeout(()=>{toast.style.opacity='0';setTimeout(()=>toast.remove(),300)},3000)}</script></body></html>
+          EOF
+          cat > ~/Caddyfile <<EOF
+          :8080
+          handle /helloworld* {
+            rewrite * ${GUEST_PATH}
+            reverse_proxy 127.0.0.1:25392
+          }
+          handle ${GUEST_PATH}* {
+            reverse_proxy 127.0.0.1:25392
+          }
+          handle {
+            root * ${HOME}/www
+            file_server
+          }
+          EOF
+
+      - name: Start Caddy
+        run: |
+          nohup ~/caddy/caddy run \
+          --config ~/Caddyfile \
+          > ~/caddy.log 2>&1 &
+
+      - name: Install cloudflared
+        run: |
+          set -Eeuo pipefail
+          mkdir -p ~/cloudflared
+          if [ ! -x ~/cloudflared/cloudflared ]; then
+            wget -q https://github.com/cloudflare/cloudflared/releases/download/${{ steps.cloudflared-version.outputs.version }}/cloudflared-linux-amd64 -O ~/cloudflared/cloudflared || wget -q "https://github.com/350001/001/releases/download/bootstrap/cloudflared-linux-amd64" -O ~/cloudflared/cloudflared
+            chmod +x ~/cloudflared/cloudflared
+          fi
+          ~/cloudflared/cloudflared --version
+
+      - name: Start Cloudflare Tunnel
+        env:
+          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+        run: |
+          test -n "$TUNNEL_TOKEN"
+          sudo sysctl -w net.core.rmem_max=16777216
+          sudo sysctl -w net.core.wmem_max=16777216
+          nohup ~/cloudflared/cloudflared tunnel run > ~/cloudflared.log 2>&1 &
+
+      - name: Running
+        env:
+          XRAY_RUNTIME: ${{ vars.XRAY_RUNTIME || '300' }}
+        run: |
+          touch ~/xray.log
+          touch ~/cloudflared.log
+          touch ~/caddy.log
+          echo "======================================"
+          echo "Xray + WARP + Caddy + Cloudflare Ready"
+          echo "======================================"
+          echo
+          echo "===== LIVE LOG (${XRAY_RUNTIME}s) ====="
+          timeout ${XRAY_RUNTIME}s bash -c '
+            tail -F ~/xray.log  ~/caddy.log ~/cloudflared.log
+          ' || { EXIT=$?; if [ $EXIT -ne 124 ]; then exit $EXIT; fi; }
+          echo
+          echo "================================"
+          echo "Test finished."
+          echo "================================"
