@@ -237,27 +237,9 @@ jobs:
           fi
           ~/caddy/caddy version
 
-      - name: Generate Website
+      - name: Start Caddy
         run: |
-          set -Eeuo pipefail
           mkdir -p ~/www/api
-          DOMAIN=${{ vars.DOMAIN || 'tunnel.nameserver.dpdns.org' }}
-          LINK="trojan://${GUEST_PASSWORD}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
-          LINK_JSON=$(printf '%s' "$LINK" | jq -Rs .)
-          EXPIRE_TIMESTAMP=$(( $(date +%s) + ${{ vars.XRAY_RUNTIME || '300' }} ))
-          jq -n \
-            --arg user "$GUEST_EMAIL" \
-            --arg password "$GUEST_PASSWORD" \
-            --arg path "$GUEST_PATH" \
-            --arg link "$LINK" \
-            --argjson expire "$EXPIRE_TIMESTAMP" \
-            '{
-              user: $user,
-              password: $password,
-              path: $path,
-              link: $link,
-              expire_timestamp: $expire
-            }' > ~/www/api/gateway.json
           cat > ~/Caddyfile <<EOF
           :8080
           handle /api/helloworld* {
@@ -272,9 +254,6 @@ jobs:
             file_server
           }
           EOF
-
-      - name: Start Caddy
-        run: |
           nohup ~/caddy/caddy run \
           --config ~/Caddyfile \
           > ~/caddy.log 2>&1 &
@@ -310,6 +289,23 @@ jobs:
           echo "======================================"
           echo
           echo "===== LIVE LOG (${XRAY_RUNTIME}s) ====="
+          DOMAIN=${{ vars.DOMAIN || 'tunnel.nameserver.dpdns.org' }}
+          LINK="trojan://${GUEST_PASSWORD}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
+          LINK_JSON=$(printf '%s' "$LINK" | jq -Rs .)
+          EXPIRE_TIMESTAMP=$(( $(date +%s) + ${XRAY_RUNTIME} ))
+          jq -n \
+            --arg user "$GUEST_EMAIL" \
+            --arg password "$GUEST_PASSWORD" \
+            --arg path "$GUEST_PATH" \
+            --arg link "$LINK" \
+            --argjson expire "$EXPIRE_TIMESTAMP" \
+            '{
+              user: $user,
+              password: $password,
+              path: $path,
+              link: $link,
+              expire_timestamp: $expire
+            }' > ~/www/api/gateway.json
           timeout ${XRAY_RUNTIME}s bash -c '
             tail -F ~/xray.log  ~/caddy.log ~/cloudflared.log
           ' || { EXIT=$?; if [ $EXIT -ne 124 ]; then exit $EXIT; fi; }
