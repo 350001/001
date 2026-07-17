@@ -240,7 +240,7 @@ jobs:
       - name: Generate Website
         run: |
           set -Eeuo pipefail
-          mkdir -p ~/www
+          mkdir -p ~/www/api
           DOMAIN=${{ vars.DOMAIN || 'tunnel.nameserver.dpdns.org' }}
           LINK="trojan://${GUEST_PASSWORD}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
           LINK_JSON=$(printf '%s' "$LINK" | jq -Rs .)
@@ -257,7 +257,7 @@ jobs:
               path: $path,
               link: $link,
               expire_timestamp: $expire
-            }' > ~/www/gateway.json
+            }' > ~/www/api/gateway.json
           cat > ~/Caddyfile <<EOF
           :8080
           handle /api/helloworld* {
