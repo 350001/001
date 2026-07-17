@@ -250,7 +250,7 @@ jobs:
           EOF
           cat > ~/Caddyfile <<EOF
           :8080
-          handle /helloworld* {
+          handle /api/helloworld* {
             rewrite * ${GUEST_PATH}
             reverse_proxy 127.0.0.1:25392
           }
