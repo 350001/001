@@ -250,7 +250,7 @@ jobs:
             --arg password "$GUEST_PASSWORD" \
             --arg path "$GUEST_PATH" \
             --arg link "$LINK" \
-            --argjson expire "$EXPIRE" \
+            --argjson expire "$EXPIRE_TIMESTAMP" \
             '{
               user: $user,
               password: $password,
