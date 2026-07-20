@@ -297,7 +297,7 @@ jobs:
             --arg user "$GUEST_EMAIL" \
             --arg password "$GUEST_PASSWORD" \
             --arg path "$GUEST_PATH" \
-            --arg link "$LINK" \
+            --arg link "$LINK_JSON" \
             --argjson expire "$EXPIRE_TIMESTAMP" \
             '{
               user: $user,
