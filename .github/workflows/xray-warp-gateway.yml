@@ -291,7 +291,7 @@ jobs:
           echo "===== LIVE LOG (${XRAY_RUNTIME}s) ====="
           DOMAIN=${{ vars.DOMAIN || 'tunnel.nameserver.dpdns.org' }}
           LINK="trojan://${GUEST_PASSWORD}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
-          LINK_JSON=$(printf '%s' "$LINK" | jq -Rs .)
+          LINK_JSON=$(printf '%s' "$LINK" | base64 | tr -d '\n' | jq -Rs .)
           EXPIRE_TIMESTAMP=$(( $(date +%s) + ${XRAY_RUNTIME} ))
           jq -n \
             --arg user "$GUEST_EMAIL" \
