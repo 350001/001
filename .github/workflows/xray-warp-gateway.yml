@@ -292,7 +292,7 @@ jobs:
           DOMAIN="${{ vars.DOMAIN }}"
           if [[ -z "$DOMAIN" ]]; then
             coproc CF {
-              cloudflared tunnel --url http://127.0.0.1:25392 2>&1
+              ~/cloudflared/cloudflared tunnel --url http://127.0.0.1:25392 2>&1
             }
             CF_PID=$COPROC_PID
             deadline=$((SECONDS + 30))
