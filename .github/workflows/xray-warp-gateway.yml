@@ -289,7 +289,25 @@ jobs:
           echo "======================================"
           echo
           echo "===== LIVE LOG (${XRAY_RUNTIME}s) ====="
-          DOMAIN=${{ vars.DOMAIN || 'tunnel.nameserver.dpdns.org' }}
+          DOMAIN="${{ vars.DOMAIN }}"
+          if [[ -z "$DOMAIN" ]]; then
+            coproc CF {
+              cloudflared tunnel --url http://127.0.0.1:25392 2>&1
+            }
+            CF_PID=$COPROC_PID
+            deadline=$((SECONDS + 30))
+            while read -r -u "${CF[0]}" line; do
+              if [[ "$line" =~ https://[a-zA-Z0-9.-]+\.trycloudflare\.com ]]; then
+                DOMAIN="${BASH_REMATCH[0]#https://}"
+                break
+              fi
+              if (( SECONDS >= deadline )); then
+                kill "$CF_PID" 2>/dev/null || true
+                exit 1
+              fi
+            done
+          fi
+          DOMAIN="${DOMAIN:-tunnel.nameserver.dpdns.org}"
           LINK="trojan://${GUEST_PASSWORD}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
           LINK_BASE64=$(printf '%s' "$LINK" | base64 | tr -d '\n')
           EXPIRE_TIMESTAMP=$(( $(date +%s) + ${XRAY_RUNTIME} ))
