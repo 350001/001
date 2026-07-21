@@ -308,7 +308,7 @@ jobs:
             done
           fi
           DOMAIN="${DOMAIN:-tunnel.nameserver.dpdns.org}"
-          LINK="trojan://${GUEST_PASSWORD}@${DOMAIN}:443?security=tls&sni=${DOMAIN}&type=ws&host=${DOMAIN}&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
+          LINK="trojan://${GUEST_PASSWORD}@${DOMAIN}:443?security=tls&type=ws&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
           LINK_BASE64=$(printf '%s' "$LINK" | base64 | tr -d '\n')
           EXPIRE_TIMESTAMP=$(( $(date +%s) + ${XRAY_RUNTIME} ))
           jq -n \
