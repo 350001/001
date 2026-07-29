@@ -71,8 +71,7 @@ jobs:
           echo "GUEST_PASSWORD=$GUEST_PASSWORD" >> $GITHUB_ENV
           echo "GUEST_PATH=$GUEST_PATH" >> $GITHUB_ENV
           mkdir -p ~/xray
-          # 从 Secret 读取 XRAY_CLIENTS，若未设置则使用空数组
-          XRAY_CLIENTS='${{ secrets.XRAY_CLIENTS_JSON }}'
+          XRAY_CLIENTS='${{ secrets.XRAY_CLIENTS }}'
           XRAY_CLIENTS="${XRAY_CLIENTS:-[]}"
           XRAY_CLIENTS_MERGED=$(
             jq \
