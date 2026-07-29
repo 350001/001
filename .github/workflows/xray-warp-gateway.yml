@@ -302,7 +302,7 @@ jobs:
             --arg path "$GUEST_PATH" \
             --arg link "$LINK_BASE64" \
             --argjson expire "$EXPIRE_TIMESTAMP" \
-            --arg node "${{ github.event.repository.name }}" \
+            --arg node "$GITHUB_REPOSITORY" \
             '{
               user: $user,
               password: $password,
