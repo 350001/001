@@ -74,6 +74,8 @@ jobs:
           echo "GUEST_PATH=$GUEST_PATH" >> $GITHUB_ENV
 
       - name: Generate Xray Config
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           set -Eeuo pipefail
           mkdir -p ~/xray
@@ -90,7 +92,6 @@ jobs:
           )
           WARP_ENDPOINT='${{ vars.WARP_ENDPOINT }}'
           WARP_MTU='${{ vars.WARP_MTU }}'
-          export GH_TOKEN='${{ secrets.GH_TOKEN }}'
           echo "${XRAY_CLIENTS_MERGED}" | jq empty >/dev/null 2>&1 || { echo "❌ XRAY_CLIENTS is not valid JSON"; exit 1; }
           if [ -n "$WARP_REG_JSON" ] && [ -n "$WARP_CONF_JSON" ]; then
             echo "✅ Using WARP config from Secrets."
