@@ -7,15 +7,34 @@ concurrency:
   group: xray-warp-gateway
   cancel-in-progress: true
 
+# ============================================
+# Global static configuration (all external inputs centralized here)
+# ============================================
 env:
+  # Core component version
   XRAY_VERSION: 26.3.27
+  # WARP config (from Secrets; auto-register if empty)
   WARP_REG_JSON: ${{ secrets.WARP_REG_JSON }}
   WARP_CONF_JSON: ${{ secrets.WARP_CONF_JSON }}
+  # GitHub token (for auto-setting secrets)
+  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+  # Cloudflare Tunnel token (required)
+  TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+  # Custom domain (optional; leave empty to auto-generate trycloudflare domain)
+  XRAY_SERVER: ${{ vars.XRAY_SERVER }}
+  # WARP endpoint and MTU (optional)
+  WARP_ENDPOINT: ${{ vars.WARP_ENDPOINT }}
+  WARP_MTU: ${{ vars.WARP_MTU }}
+  # Xray runtime in seconds
+  XRAY_RUNTIME: ${{ vars.XRAY_RUNTIME }}
+  # Preset Trojan clients (JSON array, optional)
+  XRAY_CLIENTS: ${{ secrets.XRAY_CLIENTS }}
 
 jobs:
   gateway:
     runs-on: ubuntu-latest
     steps:
+      # ---------- Cache ----------
       - name: Cache Xray
         uses: actions/cache@v6
         with:
@@ -43,6 +62,7 @@ jobs:
           path: ~/caddy
           key: caddy-${{ steps.versions.outputs.caddy }}-${{ runner.arch }}
 
+      # ---------- Install & Register WARP (only if secrets not provided) ----------
       - name: Install & Register WARP
         if: env.WARP_REG_JSON == '' || env.WARP_CONF_JSON == ''
         run: |
@@ -59,11 +79,11 @@ jobs:
           sudo chown -R "$USER:$USER" ~/warp-config
           echo "✅ WARP registered and config files saved to ~/warp-config/"
 
+      # ---------- Generate Xray Config & Guest Account ----------
       - name: Generate Config & Guest Account
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           set -Eeuo pipefail
+          # Generate dynamic credentials
           GUEST_EMAIL="guest-$(openssl rand -hex 2)"
           GUEST_PASSWORD="$(openssl rand -hex 8)"
           GUEST_PATH="/api/$(openssl rand -hex 4)"
@@ -71,8 +91,7 @@ jobs:
           echo "GUEST_PASSWORD=$GUEST_PASSWORD" >> $GITHUB_ENV
           echo "GUEST_PATH=$GUEST_PATH" >> $GITHUB_ENV
           mkdir -p ~/xray
-          XRAY_CLIENTS='${{ secrets.XRAY_CLIENTS }}'
-          XRAY_CLIENTS="${XRAY_CLIENTS:-[]}"
+          # Merge preset clients (from Secrets) and new guest
           XRAY_CLIENTS_MERGED=$(
             jq \
             --arg password "$GUEST_PASSWORD" \
@@ -81,11 +100,10 @@ jobs:
               password:$password,
               email:$email
             }]' \
-            <<< "$XRAY_CLIENTS"
+            <<< "${XRAY_CLIENTS:-[]}"
           )
-          WARP_ENDPOINT='${{ vars.WARP_ENDPOINT }}'
-          WARP_MTU='${{ vars.WARP_MTU }}'
           echo "${XRAY_CLIENTS_MERGED}" | jq empty >/dev/null 2>&1 || { echo "❌ XRAY_CLIENTS is not valid JSON"; exit 1; }
+          # Get WARP parameters (prefer Secrets, else from local file)
           if [ -n "$WARP_REG_JSON" ] && [ -n "$WARP_CONF_JSON" ]; then
             echo "✅ Using WARP config from Secrets."
             WARP_PRIVATE_KEY=$(jq -r '.secret_key' <<< "$WARP_REG_JSON")
@@ -108,6 +126,7 @@ jobs:
             WARP_IPV4=$(jq -r '.interface.v4' <<< "$CONF_COMPACT")
             WARP_IPV6=$(jq -r '.interface.v6 // empty' <<< "$CONF_COMPACT")
             WARP_ENDPOINT="${WARP_ENDPOINT:-$(jq -r '.endpoints[0].v4' <<< "$CONF_COMPACT")}"
+            # Try to save WARP config to Secrets for future reuse
             if [ -n "$GH_TOKEN" ]; then
               REPO="${{ github.repository }}"
               echo "Setting Secrets WARP_REG_JSON and WARP_CONF_JSON for future runs..."
@@ -122,7 +141,7 @@ jobs:
               echo "⚠️ GH_TOKEN not set, secrets not updated."
             fi
           fi
-          WARP_MTU=${WARP_MTU:-1280}
+          # Generate Xray config
           jq -n \
             --argjson clients "$XRAY_CLIENTS_MERGED" \
             --arg wspath "$GUEST_PATH" \
@@ -131,7 +150,7 @@ jobs:
             --arg ipv4 "$WARP_IPV4" \
             --arg ipv6 "$WARP_IPV6" \
             --arg endpoint "$WARP_ENDPOINT" \
-            --argjson mtu "$WARP_MTU" \
+            --argjson mtu "${WARP_MTU:-1280}" \
             '
             {
               "log": {
@@ -199,6 +218,7 @@ jobs:
             ' > ~/config.json
           echo "✅ Xray config generated at ~/config.json"
 
+      # ---------- Install, Test & Start Xray ----------
       - name: Install, Test & Start Xray
         run: |
           set -Eeuo pipefail
@@ -212,6 +232,7 @@ jobs:
           nohup ~/xray/xray run -config ~/config.json > ~/xray.log 2>&1 &
           echo "✅ Xray started"
 
+      # ---------- Install & Start Caddy ----------
       - name: Install & Start Caddy
         run: |
           set -Eeuo pipefail
@@ -243,9 +264,8 @@ jobs:
             > ~/caddy.log 2>&1 &
           echo "✅ Caddy started"
 
+      # ---------- Install & Start Cloudflare Tunnel ----------
       - name: Install & Start Cloudflare Tunnel
-        env:
-          TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         run: |
           set -Eeuo pipefail
           mkdir -p ~/cloudflared
@@ -261,10 +281,10 @@ jobs:
           nohup ~/cloudflared/cloudflared tunnel run > ~/cloudflared.log 2>&1 &
           echo "✅ Cloudflare Tunnel started"
 
+      # ---------- Run Monitor & Output ----------
       - name: Running Monitor
-        env:
-          XRAY_RUNTIME: ${{ vars.XRAY_RUNTIME || '300' }}
         run: |
+          XRAY_RUNTIME="${XRAY_RUNTIME:-300}"
           touch ~/xray.log
           touch ~/cloudflared.log
           touch ~/caddy.log
@@ -273,8 +293,8 @@ jobs:
           echo "======================================"
           echo
           echo "===== LIVE LOG (${XRAY_RUNTIME}s) ====="
-          DOMAIN="${{ vars.DOMAIN }}"
-          if [[ -z "$DOMAIN" ]]; then
+          XRAY_SERVER="${XRAY_SERVER}"
+          if [[ -z "$XRAY_SERVER" ]]; then
             coproc CF {
               ~/cloudflared/cloudflared tunnel --url http://127.0.0.1:25392 2>&1
             }
@@ -282,7 +302,7 @@ jobs:
             deadline=$((SECONDS + 30))
             while read -r -u "${CF[0]}" line; do
               if [[ "$line" =~ https://[a-zA-Z0-9.-]+\.trycloudflare\.com ]]; then
-                DOMAIN="${BASH_REMATCH[0]#https://}"
+                XRAY_SERVER="${BASH_REMATCH[0]#https://}"
                 break
               fi
               if (( SECONDS >= deadline )); then
@@ -291,8 +311,8 @@ jobs:
               fi
             done
           fi
-          DOMAIN="${DOMAIN:-tunnel.nameserver.dpdns.org}"
-          LINK="trojan://${GUEST_PASSWORD}@${DOMAIN}:443?security=tls&type=ws&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
+          XRAY_SERVER="${XRAY_SERVER:-tunnel.nameserver.dpdns.org}"
+          LINK="trojan://${GUEST_PASSWORD}@${XRAY_SERVER}:443?security=tls&type=ws&path=%2Fapi%2F${GUEST_PATH##*/}#${GUEST_EMAIL}"
           LINK_BASE64=$(printf '%s' "$LINK" | base64 | tr -d '\n')
           EXPIRE_TIMESTAMP=$(( $(date +%s) + ${XRAY_RUNTIME} ))
           jq -n \
