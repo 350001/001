@@ -110,7 +110,7 @@ jobs:
             WARP_PUBLIC_KEY=$(jq -r '.public_key' <<< "$WARP_CONF_JSON")
             WARP_IPV4=$(jq -r '.interface.v4' <<< "$WARP_CONF_JSON")
             WARP_IPV6=$(jq -r '.interface.v6 // empty' <<< "$WARP_CONF_JSON")
-            WARP_ENDPOINT="${WARP_ENDPOINT:-$(jq -r '.endpoints[0].v4' <<< "$WARP_CONF_JSON")}"
+            WARP_ENDPOINT="${WARP_ENDPOINT:-$(jq -r '.endpoints[0].v4 // "engage.cloudflareclient.com:2408"' <<< "$WARP_CONF_JSON")}"
           else
             echo "⚠️ Secrets not set, trying local config."
             REG_COMPACT=$(jq -c . ~/warp-config/reg.json) || {
