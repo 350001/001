@@ -65,6 +65,36 @@ jobs:
 
           echo "✅ cloudflared installed"
 
+      # ---------- Configure root ----------
+      - name: Configure root shell
+        run: |
+          set -Eeuo pipefail
+
+          echo "======================================"
+          echo " Configuring root shell"
+          echo "======================================"
+
+          echo "Runner user: $USER"
+
+          echo
+          echo "Current user:"
+          whoami
+
+          echo
+          echo "Current sudo status:"
+          sudo -n true
+
+          echo "✅ Passwordless sudo available"
+
+          echo
+          echo "Testing root:"
+          sudo whoami
+
+          echo
+          echo "======================================"
+          echo " Root shell ready"
+          echo "======================================"
+
       # ---------- Start ttyd ----------
       - name: Start ttyd
         run: |
@@ -74,13 +104,50 @@ jobs:
           echo " Starting ttyd"
           echo "======================================"
 
+          PORT=18080
+
+          echo "ttyd port: $PORT"
+
+          echo
+          echo "----- Checking port -----"
+
+          if ss -lntp | grep -q ":${PORT}"; then
+
+            echo "⚠️ Port $PORT is already in use"
+
+            ss -lntp | grep ":${PORT}" || true
+
+            echo
+            echo "Processes using port $PORT:"
+
+            sudo lsof -nP \
+              -iTCP:${PORT} \
+              -sTCP:LISTEN || true
+
+            echo
+            echo "Killing existing listener..."
+
+            sudo fuser -k "${PORT}/tcp" || true
+
+            sleep 2
+
+          else
+
+            echo "✅ Port $PORT is free"
+
+          fi
+
+          echo
+          echo "----- Starting ttyd -----"
+
           rm -f ~/ttyd.log
           touch ~/ttyd.log
 
           nohup ttyd \
+            --writable \
             -i 127.0.0.1 \
-            -p 7681 \
-            bash \
+            -p "$PORT" \
+            sudo -i \
             > ~/ttyd.log 2>&1 &
 
           echo $! > ~/ttyd.pid
@@ -88,25 +155,40 @@ jobs:
           echo "ttyd PID: $(cat ~/ttyd.pid)"
 
           echo
-          echo "⏳ Waiting for ttyd..."
+          echo "----- ttyd startup log -----"
+
+          sleep 2
+
+          cat ~/ttyd.log || true
+
+          echo
+          echo "----- Waiting for ttyd -----"
+
+          READY=false
 
           for i in {1..30}; do
 
-            if curl -fsS \
-              --max-time 2 \
-              http://127.0.0.1:7681/ \
-              -o /dev/null; then
+            if ! kill -0 "$(cat ~/ttyd.pid)" 2>/dev/null; then
 
-              echo "✅ ttyd is ready"
-              break
+              echo "❌ ttyd process exited"
+
+              echo
+              echo "===== ttyd final log ====="
+
+              cat ~/ttyd.log || true
+
+              exit 1
+
             fi
 
-            if ! kill -0 "$(cat ~/ttyd.pid)" 2>/dev/null; then
-              echo "❌ ttyd process exited"
-              echo
-              echo "===== ttyd log ====="
-              cat ~/ttyd.log || true
-              exit 1
+            if ss -lntp | grep -q ":${PORT}"; then
+
+              READY=true
+
+              echo "✅ ttyd is listening on port $PORT"
+
+              break
+
             fi
 
             echo "Waiting for ttyd... $i/30"
@@ -115,6 +197,29 @@ jobs:
 
           done
 
+          if [ "$READY" != true ]; then
+
+            echo "❌ ttyd failed to start"
+
+            echo
+            echo "===== Process ====="
+
+            ps -fp "$(cat ~/ttyd.pid)" || true
+
+            echo
+            echo "===== Ports ====="
+
+            ss -lntp || true
+
+            echo
+            echo "===== ttyd log ====="
+
+            cat ~/ttyd.log || true
+
+            exit 1
+
+          fi
+
           echo
           echo "======================================"
           echo " ttyd status"
@@ -122,22 +227,25 @@ jobs:
 
           echo
           echo "----- Process -----"
+
           ps -fp "$(cat ~/ttyd.pid)" || true
 
           echo
-          echo "----- Port 7681 -----"
-          ss -lntp | grep ':7681' || true
+          echo "----- Port -----"
+
+          ss -lntp | grep ":${PORT}" || true
 
           echo
           echo "----- ttyd log -----"
+
           cat ~/ttyd.log || true
 
           echo
-          echo "----- HTTP check -----"
+          echo "----- HTTP test -----"
 
           curl -I \
             --max-time 5 \
-            http://127.0.0.1:7681/ || true
+            "http://127.0.0.1:${PORT}/" || true
 
           echo
           echo "✅ ttyd startup completed"
@@ -174,16 +282,6 @@ jobs:
             echo
             echo "----- Tunnel check $i/60 -----"
 
-            if grep -q "Registered tunnel connection" \
-              ~/cloudflared.log 2>/dev/null; then
-
-              CONNECTED=true
-
-              echo "✅ Cloudflare Tunnel connected"
-
-              break
-            fi
-
             if ! kill -0 "$(cat ~/cloudflared.pid)" 2>/dev/null; then
 
               echo "❌ cloudflared process exited"
@@ -194,6 +292,18 @@ jobs:
               cat ~/cloudflared.log || true
 
               exit 1
+
+            fi
+
+            if grep -q "Registered tunnel connection" \
+              ~/cloudflared.log 2>/dev/null; then
+
+              CONNECTED=true
+
+              echo "✅ Cloudflare Tunnel connected"
+
+              break
+
             fi
 
             echo
@@ -204,7 +314,7 @@ jobs:
             echo
             echo "----- cloudflared log -----"
 
-            tail -n 20 ~/cloudflared.log || true
+            tail -n 30 ~/cloudflared.log || true
 
             sleep 2
 
@@ -216,13 +326,20 @@ jobs:
           echo "======================================"
 
           if [ "$CONNECTED" = true ]; then
+
             echo "✅ Tunnel connection confirmed"
+
           else
+
             echo "❌ Tunnel connection NOT confirmed"
+
             echo
             echo "===== cloudflared final log ====="
+
             cat ~/cloudflared.log || true
+
             exit 1
+
           fi
 
           echo
@@ -235,10 +352,12 @@ jobs:
 
           cat ~/cloudflared.log || true
 
-      # ---------- Runtime monitor ----------
+      # ---------- Runtime Monitor ----------
       - name: Runtime Monitor
         run: |
           set -Eeuo pipefail
+
+          PORT=18080
 
           echo
           echo "======================================"
@@ -246,10 +365,13 @@ jobs:
           echo "======================================"
           echo
           echo "Local ttyd:"
-          echo "http://127.0.0.1:7681"
+          echo "http://127.0.0.1:${PORT}"
           echo
-          echo "Public URL:"
+          echo "Cloudflare:"
           echo "https://ssh-test.你的域名"
+          echo
+          echo "Shell:"
+          echo "root"
           echo
           echo "======================================"
           echo
@@ -266,18 +388,17 @@ jobs:
           echo
           echo "===== Initial ports ====="
 
-          ss -lntp | grep -E ':7681|:60123' || true
+          ss -lntp |
+            grep -E ":${PORT}|:60123" ||
+            true
 
           echo
-          echo "======================================"
-          echo " LIVE LOG"
-          echo "======================================"
+          echo "===== Initial ttyd log ====="
 
-          # ttyd log
-          tail -n 50 ~/ttyd.log || true
+          cat ~/ttyd.log || true
 
           echo
-          echo "===== cloudflared log ====="
+          echo "===== Initial cloudflared log ====="
 
           tail -n 50 ~/cloudflared.log || true
 
@@ -293,14 +414,18 @@ jobs:
             echo "===== $(date -u '+%Y-%m-%dT%H:%M:%SZ') ====="
             echo "======================================"
 
-            # ---------- ttyd ----------
+            # ---------- ttyd process ----------
             echo
             echo "----- ttyd process -----"
 
             if kill -0 "$(cat ~/ttyd.pid)" 2>/dev/null; then
+
               echo "✅ ttyd process alive"
+
               ps -fp "$(cat ~/ttyd.pid)" || true
+
             else
+
               echo "❌ ttyd process DEAD"
 
               echo
@@ -309,16 +434,21 @@ jobs:
               cat ~/ttyd.log || true
 
               exit 1
+
             fi
 
             # ---------- ttyd port ----------
             echo
             echo "----- ttyd port -----"
 
-            if ss -lntp | grep -q ':7681'; then
-              echo "✅ 127.0.0.1:7681 listening"
+            if ss -lntp | grep -q ":${PORT}"; then
+
+              echo "✅ 127.0.0.1:${PORT} listening"
+
             else
-              echo "❌ port 7681 is not listening"
+
+              echo "❌ port ${PORT} is not listening"
+
             fi
 
             # ---------- ttyd HTTP ----------
@@ -327,7 +457,7 @@ jobs:
 
             if curl -fsS \
               --max-time 3 \
-              http://127.0.0.1:7681/ \
+              "http://127.0.0.1:${PORT}/" \
               -o /dev/null; then
 
               echo "✅ ttyd HTTP OK"
@@ -344,7 +474,7 @@ jobs:
 
             tail -n 50 ~/ttyd.log || true
 
-            # ---------- cloudflared ----------
+            # ---------- cloudflared process ----------
             echo
             echo "----- cloudflared process -----"
 
@@ -373,15 +503,15 @@ jobs:
 
             tail -n 50 ~/cloudflared.log || true
 
-            # ---------- network ----------
+            # ---------- Network ----------
             echo
             echo "----- Listening ports -----"
 
             ss -lntp |
-              grep -E ':7681|:60123' ||
+              grep -E ":${PORT}|:60123" ||
               true
 
-            # ---------- processes ----------
+            # ---------- Processes ----------
             echo
             echo "----- Gateway processes -----"
 
