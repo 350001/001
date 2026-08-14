@@ -1,0 +1,150 @@
+name: Cloudflare Browser SSH Test
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: browser-ssh-test
+  cancel-in-progress: true
+
+env:
+  SSH_CA_PUB: ${{ secrets.SSH_CA_PUB }}
+  TUNNEL_TOKEN: ${{ secrets.SSH_TUNNEL_TOKEN }}
+
+jobs:
+  ssh:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Install SSH server
+        run: |
+          set -Eeuo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+
+          sudo mkdir -p /run/sshd
+
+          echo "✅ SSH server installed"
+
+      - name: Configure Cloudflare SSH CA
+        run: |
+          set -Eeuo pipefail
+
+          test -n "$SSH_CA_PUB"
+
+          printf '%s\n' "$SSH_CA_PUB" |
+            sudo tee /etc/ssh/ca.pub >/dev/null
+
+          sudo chmod 644 /etc/ssh/ca.pub
+
+          sudo tee /etc/ssh/sshd_config.d/cloudflare-ca.conf >/dev/null <<'EOF'
+          PubkeyAuthentication yes
+          TrustedUserCAKeys /etc/ssh/ca.pub
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          ChallengeResponseAuthentication no
+          PermitRootLogin yes
+          EOF
+
+          sudo sshd -t
+
+          echo "✅ Cloudflare CA configured"
+
+      - name: Start SSH
+        run: |
+          set -Eeuo pipefail
+
+          sudo systemctl enable ssh
+          sudo systemctl restart ssh
+
+          echo
+          sudo ss -lntp | grep ':22'
+          echo
+
+          echo "✅ SSH listening on port 22"
+
+      - name: Install cloudflared
+        run: |
+          set -Eeuo pipefail
+
+          mkdir -p "$HOME/cloudflared"
+
+          VERSION=$(curl -fsSL \
+            https://api.github.com/repos/cloudflare/cloudflared/releases/latest |
+            jq -r '.tag_name')
+
+          echo "cloudflared version: $VERSION"
+
+          curl -fsSL \
+            "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-linux-amd64" \
+            -o "$HOME/cloudflared/cloudflared"
+
+          chmod +x "$HOME/cloudflared/cloudflared"
+
+          "$HOME/cloudflared/cloudflared" --version
+
+      - name: Start Cloudflare Tunnel
+        run: |
+          set -Eeuo pipefail
+
+          test -n "$TUNNEL_TOKEN"
+
+          nohup "$HOME/cloudflared/cloudflared" tunnel run \
+            --token "$TUNNEL_TOKEN" \
+            > "$HOME/cloudflared.log" 2>&1 &
+
+          echo $! > "$HOME/cloudflared.pid"
+
+          echo "⏳ Waiting for Cloudflare Tunnel..."
+
+          for i in {1..60}; do
+
+            if grep -q "Registered tunnel connection" \
+              "$HOME/cloudflared.log" 2>/dev/null; then
+
+              echo "✅ Cloudflare Tunnel connected"
+              break
+
+            fi
+
+            sleep 2
+
+          done
+
+          echo
+          echo "===== Cloudflared ====="
+
+          tail -n 30 "$HOME/cloudflared.log" || true
+
+      - name: Keep alive
+        run: |
+          set -Eeuo pipefail
+
+          echo
+          echo "=========================================="
+          echo " Cloudflare Browser SSH TEST"
+          echo "=========================================="
+          echo
+          echo "SSH target: root@localhost:22"
+          echo "Password authentication: disabled"
+          echo
+          echo "Open:"
+          echo "https://ssh-test.你的域名"
+          echo
+
+          while true; do
+
+            echo "===== $(date -u '+%Y-%m-%dT%H:%M:%SZ') ====="
+
+            sudo ss -lntp | grep ':22' || true
+
+            echo
+            pgrep -af cloudflared || true
+
+            echo
+
+            sleep 60
+
+          done
