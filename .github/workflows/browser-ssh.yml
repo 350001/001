@@ -1,10 +1,10 @@
-name: Cloudflare Web Terminal Test
+name: Cloudflare Web Terminal
 
 on:
   workflow_dispatch:
 
 concurrency:
-  group: web-terminal-test
+  group: web-terminal
   cancel-in-progress: true
 
 env:
@@ -16,514 +16,55 @@ jobs:
 
     steps:
 
-      # ---------- Install ttyd ----------
-      - name: Install ttyd
-        run: |
-          set -Eeuo pipefail
-
-          echo "======================================"
-          echo " Installing ttyd"
-          echo "======================================"
-
-          sudo apt-get update
-          sudo apt-get install -y ttyd
-
-          echo
-          echo "===== ttyd version ====="
-          ttyd --version
-          echo
-
-          echo "✅ ttyd installed"
-
-      # ---------- Install cloudflared ----------
       - name: Install cloudflared
         run: |
           set -Eeuo pipefail
-
-          echo "======================================"
-          echo " Installing cloudflared"
-          echo "======================================"
-
           mkdir -p ~/cloudflared
-
           VERSION=$(curl -fsSL \
             https://api.github.com/repos/cloudflare/cloudflared/releases/latest |
             jq -r '.tag_name')
-
-          echo "cloudflared version: $VERSION"
-
           curl -fsSL \
             "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-linux-amd64" \
             -o ~/cloudflared/cloudflared
-
           chmod +x ~/cloudflared/cloudflared
 
-          echo
-          echo "===== cloudflared version ====="
-          ~/cloudflared/cloudflared --version
-          echo
-
-          echo "✅ cloudflared installed"
-
-      # ---------- Configure root ----------
-      - name: Configure root shell
-        run: |
-          set -Eeuo pipefail
-
-          echo "======================================"
-          echo " Configuring root shell"
-          echo "======================================"
-
-          echo "Runner user: $USER"
-
-          echo
-          echo "Current user:"
-          whoami
-
-          echo
-          echo "Current sudo status:"
-          sudo -n true
-
-          echo "✅ Passwordless sudo available"
-
-          echo
-          echo "Testing root:"
-          sudo whoami
-
-          echo
-          echo "======================================"
-          echo " Root shell ready"
-          echo "======================================"
-
-      # ---------- Start ttyd ----------
       - name: Start ttyd
         run: |
           set -Eeuo pipefail
-
-          echo "======================================"
-          echo " Starting ttyd"
-          echo "======================================"
-
-          PORT=18080
-
-          echo "ttyd port: $PORT"
-
-          echo
-          echo "----- Checking port -----"
-
-          if ss -lntp | grep -q ":${PORT}"; then
-
-            echo "⚠️ Port $PORT is already in use"
-
-            ss -lntp | grep ":${PORT}" || true
-
-            echo
-            echo "Processes using port $PORT:"
-
-            sudo lsof -nP \
-              -iTCP:${PORT} \
-              -sTCP:LISTEN || true
-
-            echo
-            echo "Killing existing listener..."
-
-            sudo fuser -k "${PORT}/tcp" || true
-
-            sleep 2
-
-          else
-
-            echo "✅ Port $PORT is free"
-
+          if ! command -v ttyd >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ttyd
           fi
-
-          echo
-          echo "----- Starting ttyd -----"
-
-          rm -f ~/ttyd.log
-          touch ~/ttyd.log
-
           nohup ttyd \
             --writable \
             -i 127.0.0.1 \
-            -p "$PORT" \
+            -p 18080 \
             sudo -i \
             > ~/ttyd.log 2>&1 &
-
           echo $! > ~/ttyd.pid
-
-          echo "ttyd PID: $(cat ~/ttyd.pid)"
-
-          echo
-          echo "----- ttyd startup log -----"
-
           sleep 2
+          curl -fsS \
+            http://127.0.0.1:18080/ \
+            >/dev/null
+          echo "✅ ttyd ready"
 
-          cat ~/ttyd.log || true
-
-          echo
-          echo "----- Waiting for ttyd -----"
-
-          READY=false
-
-          for i in {1..30}; do
-
-            if ! kill -0 "$(cat ~/ttyd.pid)" 2>/dev/null; then
-
-              echo "❌ ttyd process exited"
-
-              echo
-              echo "===== ttyd final log ====="
-
-              cat ~/ttyd.log || true
-
-              exit 1
-
-            fi
-
-            if ss -lntp | grep -q ":${PORT}"; then
-
-              READY=true
-
-              echo "✅ ttyd is listening on port $PORT"
-
-              break
-
-            fi
-
-            echo "Waiting for ttyd... $i/30"
-
-            sleep 1
-
-          done
-
-          if [ "$READY" != true ]; then
-
-            echo "❌ ttyd failed to start"
-
-            echo
-            echo "===== Process ====="
-
-            ps -fp "$(cat ~/ttyd.pid)" || true
-
-            echo
-            echo "===== Ports ====="
-
-            ss -lntp || true
-
-            echo
-            echo "===== ttyd log ====="
-
-            cat ~/ttyd.log || true
-
-            exit 1
-
-          fi
-
-          echo
-          echo "======================================"
-          echo " ttyd status"
-          echo "======================================"
-
-          echo
-          echo "----- Process -----"
-
-          ps -fp "$(cat ~/ttyd.pid)" || true
-
-          echo
-          echo "----- Port -----"
-
-          ss -lntp | grep ":${PORT}" || true
-
-          echo
-          echo "----- ttyd log -----"
-
-          cat ~/ttyd.log || true
-
-          echo
-          echo "----- HTTP test -----"
-
-          curl -I \
-            --max-time 5 \
-            "http://127.0.0.1:${PORT}/" || true
-
-          echo
-          echo "✅ ttyd startup completed"
-
-      # ---------- Start Cloudflare Tunnel ----------
       - name: Start Cloudflare Tunnel
         run: |
           set -Eeuo pipefail
-
-          echo "======================================"
-          echo " Starting Cloudflare Tunnel"
-          echo "======================================"
-
           test -n "$TUNNEL_TOKEN"
-
-          rm -f ~/cloudflared.log
-          touch ~/cloudflared.log
-
           nohup ~/cloudflared/cloudflared tunnel run \
             --token "$TUNNEL_TOKEN" \
-            > ~/cloudflared.log 2>&1 &
+            > /dev/null 2>&1 &
+          echo "✅ Cloudflare Tunnel started"
 
-          echo $! > ~/cloudflared.pid
-
-          echo "cloudflared PID: $(cat ~/cloudflared.pid)"
-
-          echo
-          echo "⏳ Waiting for Cloudflare Tunnel..."
-
-          CONNECTED=false
-
-          for i in {1..60}; do
-
-            echo
-            echo "----- Tunnel check $i/60 -----"
-
-            if ! kill -0 "$(cat ~/cloudflared.pid)" 2>/dev/null; then
-
-              echo "❌ cloudflared process exited"
-
-              echo
-              echo "===== cloudflared log ====="
-
-              cat ~/cloudflared.log || true
-
-              exit 1
-
-            fi
-
-            if grep -q "Registered tunnel connection" \
-              ~/cloudflared.log 2>/dev/null; then
-
-              CONNECTED=true
-
-              echo "✅ Cloudflare Tunnel connected"
-
-              break
-
-            fi
-
-            echo
-            echo "----- cloudflared process -----"
-
-            ps -fp "$(cat ~/cloudflared.pid)" || true
-
-            echo
-            echo "----- cloudflared log -----"
-
-            tail -n 30 ~/cloudflared.log || true
-
-            sleep 2
-
-          done
-
-          echo
-          echo "======================================"
-          echo " Cloudflare Tunnel status"
-          echo "======================================"
-
-          if [ "$CONNECTED" = true ]; then
-
-            echo "✅ Tunnel connection confirmed"
-
-          else
-
-            echo "❌ Tunnel connection NOT confirmed"
-
-            echo
-            echo "===== cloudflared final log ====="
-
-            cat ~/cloudflared.log || true
-
-            exit 1
-
-          fi
-
-          echo
-          echo "----- cloudflared process -----"
-
-          ps -fp "$(cat ~/cloudflared.pid)" || true
-
-          echo
-          echo "----- cloudflared log -----"
-
-          cat ~/cloudflared.log || true
-
-      # ---------- Runtime Monitor ----------
-      - name: Runtime Monitor
+      - name: Keep alive
         run: |
-          set -Eeuo pipefail
-
-          PORT=18080
-
           echo
           echo "======================================"
           echo " Cloudflare Web Terminal READY"
           echo "======================================"
           echo
-          echo "Local ttyd:"
-          echo "http://127.0.0.1:${PORT}"
+          echo "https://ssh.zhongguotaiwan.eu.org"
           echo
-          echo "Cloudflare:"
-          echo "https://ssh-test.你的域名"
-          echo
-          echo "Shell:"
-          echo "root"
-          echo
-          echo "======================================"
-          echo
-
-          echo "===== Initial ttyd process ====="
-
-          ps -fp "$(cat ~/ttyd.pid)" || true
-
-          echo
-          echo "===== Initial cloudflared process ====="
-
-          ps -fp "$(cat ~/cloudflared.pid)" || true
-
-          echo
-          echo "===== Initial ports ====="
-
-          ss -lntp |
-            grep -E ":${PORT}|:60123" ||
-            true
-
-          echo
-          echo "===== Initial ttyd log ====="
-
-          cat ~/ttyd.log || true
-
-          echo
-          echo "===== Initial cloudflared log ====="
-
-          tail -n 50 ~/cloudflared.log || true
-
-          echo
-          echo "======================================"
-          echo " Starting live monitor"
-          echo "======================================"
-
-          while true; do
-
-            echo
-            echo "======================================"
-            echo "===== $(date -u '+%Y-%m-%dT%H:%M:%SZ') ====="
-            echo "======================================"
-
-            # ---------- ttyd process ----------
-            echo
-            echo "----- ttyd process -----"
-
-            if kill -0 "$(cat ~/ttyd.pid)" 2>/dev/null; then
-
-              echo "✅ ttyd process alive"
-
-              ps -fp "$(cat ~/ttyd.pid)" || true
-
-            else
-
-              echo "❌ ttyd process DEAD"
-
-              echo
-              echo "===== ttyd final log ====="
-
-              cat ~/ttyd.log || true
-
-              exit 1
-
-            fi
-
-            # ---------- ttyd port ----------
-            echo
-            echo "----- ttyd port -----"
-
-            if ss -lntp | grep -q ":${PORT}"; then
-
-              echo "✅ 127.0.0.1:${PORT} listening"
-
-            else
-
-              echo "❌ port ${PORT} is not listening"
-
-            fi
-
-            # ---------- ttyd HTTP ----------
-            echo
-            echo "----- ttyd HTTP check -----"
-
-            if curl -fsS \
-              --max-time 3 \
-              "http://127.0.0.1:${PORT}/" \
-              -o /dev/null; then
-
-              echo "✅ ttyd HTTP OK"
-
-            else
-
-              echo "❌ ttyd HTTP FAILED"
-
-            fi
-
-            # ---------- ttyd log ----------
-            echo
-            echo "----- ttyd log -----"
-
-            tail -n 50 ~/ttyd.log || true
-
-            # ---------- cloudflared process ----------
-            echo
-            echo "----- cloudflared process -----"
-
-            if kill -0 "$(cat ~/cloudflared.pid)" 2>/dev/null; then
-
-              echo "✅ cloudflared process alive"
-
-              ps -fp "$(cat ~/cloudflared.pid)" || true
-
-            else
-
-              echo "❌ cloudflared process DEAD"
-
-              echo
-              echo "===== cloudflared final log ====="
-
-              cat ~/cloudflared.log || true
-
-              exit 1
-
-            fi
-
-            # ---------- cloudflared log ----------
-            echo
-            echo "----- cloudflared log -----"
-
-            tail -n 50 ~/cloudflared.log || true
-
-            # ---------- Network ----------
-            echo
-            echo "----- Listening ports -----"
-
-            ss -lntp |
-              grep -E ":${PORT}|:60123" ||
-              true
-
-            # ---------- Processes ----------
-            echo
-            echo "----- Gateway processes -----"
-
-            ps -eo \
-              pid,ppid,comm,%cpu,%mem,etime,rss,args |
-              grep -E 'ttyd|cloudflared' |
-              grep -v grep ||
-              true
-
-            echo
-            echo "----- Next check in 30 seconds -----"
-
-            sleep 30
-
-          done
+          echo "===== ttyd log ====="
+          tail -F ~/ttyd.log
