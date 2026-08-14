@@ -93,10 +93,14 @@ jobs:
 
       - name: Keep alive
         run: |
+          set -Eeuo pipefail
           echo
           echo "======================================"
           echo " Cloudflare Browser SSH READY"
           echo "======================================"
+          echo
+          echo "Waiting for root SSH login..."
+          echo
           while true; do
             if ! kill -0 "$(cat ~/cloudflared.pid)" 2>/dev/null; then
               echo "ERROR: cloudflared stopped."
@@ -106,5 +110,29 @@ jobs:
               echo "ERROR: sshd stopped listening on port 22."
               exit 1
             fi
-            sleep 30
+            if pgrep -u root -f 'sshd: root@' >/dev/null 2>&1; then
+              echo "✅ Root SSH session detected."
+              break
+            fi
+            sleep 5
           done
+          echo
+          echo "Root SSH session is active."
+          echo "Waiting for SSH disconnect..."
+          echo
+          while pgrep -u root -f 'sshd: root@' >/dev/null 2>&1; do
+            if ! kill -0 "$(cat ~/cloudflared.pid)" 2>/dev/null; then
+              echo "ERROR: cloudflared stopped."
+              exit 1
+            fi
+            if ! sudo ss -lnt | grep -q ':22 '; then
+              echo "ERROR: sshd stopped listening on port 22."
+              exit 1
+            fi
+            sleep 5
+          done
+          echo
+          echo "======================================"
+          echo " Root SSH session disconnected."
+          echo " Ending GitHub Actions..."
+          echo "======================================"
