@@ -53,7 +53,6 @@ jobs:
           set -Eeuo pipefail
           test -n "$TUNNEL_TOKEN"
           nohup ~/cloudflared/cloudflared tunnel run \
-            --token "$TUNNEL_TOKEN" \
             > /dev/null 2>&1 &
           echo "✅ Cloudflare Tunnel started"
 
