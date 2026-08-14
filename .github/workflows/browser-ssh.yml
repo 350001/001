@@ -20,53 +20,108 @@ jobs:
       - name: Install cloudflared
         run: |
           set -Eeuo pipefail
+
           mkdir -p ~/cloudflared
+
           VERSION=$(curl -fsSL \
             https://api.github.com/repos/cloudflare/cloudflared/releases/latest |
             jq -r '.tag_name')
+
           curl -fsSL \
             "https://github.com/cloudflare/cloudflared/releases/download/${VERSION}/cloudflared-linux-amd64" \
             -o ~/cloudflared/cloudflared
+
           chmod +x ~/cloudflared/cloudflared
+
+          ~/cloudflared/cloudflared --version
 
       - name: Prepare SSH
         run: |
           set -Eeuo pipefail
+
+          echo "==> Checking OpenSSH server..."
+
           if ! command -v sshd >/dev/null 2>&1; then
             echo "==> Installing openssh-server..."
+
             sudo apt-get update
             sudo apt-get install -y openssh-server
           else
             echo "==> openssh-server already installed"
           fi
-          test -n "$ROOT_PASSWORD"
+
+          echo "==> Checking root password..."
+
+          if [ -z "$ROOT_PASSWORD" ]; then
+            echo "ERROR: ROOT_PASSWORD secret is not configured."
+            exit 1
+          fi
+
           echo "==> Setting root password..."
+
           echo "root:$ROOT_PASSWORD" | sudo chpasswd
+
           echo "==> Configuring root SSH login..."
+
           sudo mkdir -p /etc/ssh/sshd_config.d
+
           sudo tee /etc/ssh/sshd_config.d/99-root-login.conf >/dev/null <<'EOF'
           PermitRootLogin yes
           PasswordAuthentication yes
           KbdInteractiveAuthentication no
           UsePAM yes
           EOF
+
+          echo "==> Preparing sshd runtime directory..."
+
+          sudo mkdir -p /run/sshd
+          sudo chmod 755 /run/sshd
+
           echo "==> Validating sshd configuration..."
+
           sudo sshd -t
-          echo "==> Starting SSH server..."
-          sudo systemctl enable ssh
-          sudo systemctl restart ssh
-          echo "==> SSH listening:"
-          sudo ss -lntp | grep ':22 ' || true
-          echo "✅ SSH ready"
+
+          echo "==> Starting sshd..."
+
+          sudo /usr/sbin/sshd
+
+          echo "==> Checking SSH listener..."
+
+          sudo ss -lntp | grep ':22 ' || {
+            echo "ERROR: SSH is not listening on port 22."
+            exit 1
+          }
+
+          echo "✅ SSH ready on port 22"
 
       - name: Start Cloudflare Tunnel
         run: |
           set -Eeuo pipefail
-          test -n "$TUNNEL_TOKEN"
+
+          if [ -z "$TUNNEL_TOKEN" ]; then
+            echo "ERROR: SSH_TUNNEL_TOKEN secret is not configured."
+            exit 1
+          fi
+
+          echo "==> Starting Cloudflare Tunnel..."
+
           nohup ~/cloudflared/cloudflared tunnel run \
             --token "$TUNNEL_TOKEN" \
             > /dev/null 2>&1 &
+
+          CLOUDFLARED_PID=$!
+
+          echo "$CLOUDFLARED_PID" > ~/cloudflared.pid
+
+          sleep 3
+
+          if ! kill -0 "$CLOUDFLARED_PID" 2>/dev/null; then
+            echo "ERROR: cloudflared exited unexpectedly."
+            exit 1
+          fi
+
           echo "✅ Cloudflare Tunnel started"
+          echo "PID: $CLOUDFLARED_PID"
 
       - name: Keep alive
         run: |
@@ -75,9 +130,29 @@ jobs:
           echo " Cloudflare Browser SSH READY"
           echo "======================================"
           echo
-          echo "SSH user: root"
+          echo "URL:"
+          echo "https://ssh.zhongguotaiwan.eu.org"
+          echo
+          echo "SSH user:"
+          echo "root"
+          echo
+          echo "SSH port:"
+          echo "22"
           echo
           echo "======================================"
+
           while true; do
-            sleep 300
+
+            if ! kill -0 "$(cat ~/cloudflared.pid)" 2>/dev/null; then
+              echo "ERROR: cloudflared stopped."
+              exit 1
+            fi
+
+            if ! sudo ss -lnt | grep -q ':22 '; then
+              echo "ERROR: sshd stopped listening on port 22."
+              exit 1
+            fi
+
+            sleep 30
+
           done
