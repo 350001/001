@@ -29,7 +29,35 @@ jobs:
             -o ~/cloudflared/cloudflared
           chmod +x ~/cloudflared/cloudflared
 
-
+      - name: Prepare SSH
+        run: |
+          set -Eeuo pipefail
+          if ! command -v sshd >/dev/null 2>&1; then
+            echo "==> Installing openssh-server..."
+            sudo apt-get update
+            sudo apt-get install -y openssh-server
+          else
+            echo "==> openssh-server already installed"
+          fi
+          test -n "$ROOT_PASSWORD"
+          echo "==> Setting root password..."
+          echo "root:$ROOT_PASSWORD" | sudo chpasswd
+          echo "==> Configuring root SSH login..."
+          sudo mkdir -p /etc/ssh/sshd_config.d
+          sudo tee /etc/ssh/sshd_config.d/99-root-login.conf >/dev/null <<'EOF'
+          PermitRootLogin yes
+          PasswordAuthentication yes
+          KbdInteractiveAuthentication no
+          UsePAM yes
+          EOF
+          echo "==> Validating sshd configuration..."
+          sudo sshd -t
+          echo "==> Starting SSH server..."
+          sudo systemctl enable ssh
+          sudo systemctl restart ssh
+          echo "==> SSH listening:"
+          sudo ss -lntp | grep ':22 ' || true
+          echo "✅ SSH ready"
 
       - name: Start Cloudflare Tunnel
         run: |
